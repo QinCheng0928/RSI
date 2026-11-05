@@ -48,9 +48,9 @@ scenario_space:
 rubric:
   rubric_version: v1
   principles:
-    - "首先满足任务硬约束；只有真实行为证据支持的优势才参与偏好比较。"
-    - "关注稳定性、效率、鲁棒性及互补策略，不以异常条数代替质量。"
-  tradeoff_guidance: "按真实任务上下文解释取舍；证据不足时允许平局或不可比。"
+    - "Satisfy hard task constraints first; consider advantages in preference comparisons only when supported by actual behavioral evidence."
+    - "Consider stability, efficiency, robustness, and complementary strategies; do not use anomaly counts as a proxy for quality."
+  tradeoff_guidance: "Explain tradeoffs in the actual task context; allow ties or incomparable judgments when evidence is insufficient."
 
 models:
   local:

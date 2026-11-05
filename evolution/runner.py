@@ -83,7 +83,7 @@ class Evolution:
                 "comparable": a.comparable} for a in assessments],
             "executable_count": len(deployable),
             "invalid_count": sum(a.status != Status.EXECUTABLE for a in assessments),
-            "deployable_ids": deployable, "deployment_message": "评估通过的可执行候选见 deployable_ids" if deployable else "无可部署算法",
+            "deployable_ids": deployable, "deployment_message": "See deployable_ids for executable candidates that passed evaluation" if deployable else "No deployable algorithms",
             "status": status, "reason": reason, "config_hash": self.fingerprint}
         self.store.pointer("experiment_manifest.json", result)
         return result

@@ -11,11 +11,11 @@ from evolution.storage import Store
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="生成 → 测试（含执行/缓存）→ 评估（含选择）")
+    parser = argparse.ArgumentParser(description="Generation → testing (execution/caching) → evaluation (selection)")
     parser.add_argument("command", choices=["validate", "prepare", "generate", "build-suite", "run"])
-    parser.add_argument("--problem", default="port_route_planning", help="problems/ 下的问题目录名")
-    parser.add_argument("--run-id", default=None, help="复用同一 ID 可恢复最后提交代")
-    parser.add_argument("--experiment", help="该问题 experiments/ 下的 YAML 覆盖配置名")
+    parser.add_argument("--problem", default="port_route_planning", help="Problem directory name under problems/")
+    parser.add_argument("--run-id", default=None, help="Reuse the same ID to resume from the last committed generation")
+    parser.add_argument("--experiment", help="YAML configuration overlay name under the problem's experiments/ directory")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z][a-z0-9_]*", args.problem):
         parser.error("invalid problem directory name")

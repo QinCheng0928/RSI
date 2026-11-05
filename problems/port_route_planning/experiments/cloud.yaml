@@ -1,4 +1,4 @@
-# 按角色选择云 API；核心调用代码无需改动。
+# Select the cloud API for each role without changing the core calling code.
 agents:
   generator: cloud
   tester: cloud

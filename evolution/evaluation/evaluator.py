@@ -50,18 +50,16 @@ class Evaluator:
             self.store.save(base + "/correctness.json", [c.model_dump() for c in correctness])
             enough_behavior = all(u.record.evidence for u in uses)
             if failed or not all(c.passed for c in correctness) or not enough_behavior:
-                blocked = any(u.record.result.status == Status.EXECUTION_BLOCKED for u in uses)
-                status = Status.EXECUTION_BLOCKED if blocked else Status.INVALID
                 reasons = [u.record.result.failure_category or u.record.result.status.value for u in failed]
                 if not failed:
                     reasons = [c.explanation for c in correctness if not c.passed]
                     if not enough_behavior:
                         reasons.append("missing valid behavior observations")
-                diagnosis = Diagnosis(individual_id=individual.individual_id, status=status,
+                diagnosis = Diagnosis(individual_id=individual.individual_id, status=Status.INVALID,
                     category="; ".join(reasons), failure_refs=[u.record_ref for u in uses],
                     next_generation_feedback="Use these observations only during the next generation; do not repair or rerun this candidate now.")
                 self.store.save(base + "/failure_diagnosis.json", diagnosis)
-                assessments.append(Assessment(individual=individual, status=status, correctness_pass=False,
+                assessments.append(Assessment(individual=individual, status=Status.INVALID, correctness_pass=False,
                     comparable=False, diagnosis=diagnosis))
                 continue
             alias = aliases[individual.individual_id]

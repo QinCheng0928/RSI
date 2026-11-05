@@ -25,7 +25,6 @@ class Model(BaseModel):
 class Status(str, Enum):
     EXECUTABLE = "EXECUTABLE"
     INVALID = "INVALID"
-    EXECUTION_BLOCKED = "EXECUTION_BLOCKED"
     INFRA_ERROR = "INFRA_ERROR"
 
 
@@ -233,7 +232,7 @@ class SelectionReport(Model):
     duplicate_code_groups: list[list[str]]
     comparison_graph: list[PairJudgment]
     behavior_quality_available: bool
-    rule_version: str = "evaluation-selection-v2"
+    rule_version: str = "evaluation-selection-v3"
 
 
 class Population(Model):

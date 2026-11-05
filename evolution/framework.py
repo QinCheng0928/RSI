@@ -30,8 +30,8 @@ class Simulator(Protocol):
         Load algorithm.py with evolution.testing.loader.load_algorithm inside
         the sandbox worker, then call solve(observation, seed). Enforce network,
         filesystem, CPU, memory, and wall-clock isolation in the real sandbox.
-        Return INVALID for algorithm faults or EXECUTION_BLOCKED for blocked
-        operations, or raise AlgorithmExecutionError with actual error details.
+        Return INVALID for algorithm failures, or raise AlgorithmExecutionError
+        with actual error details.
         Raise InfrastructureError for service failures. Never repair candidate
         code during execution.
         """

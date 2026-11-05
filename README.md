@@ -159,7 +159,6 @@ Evaluation first checks execution evidence and hard correctness constraints:
 |---|---|
 | `EXECUTABLE` | Valid execution and behavior evidence that passes correctness checks. |
 | `INVALID` | Generation, syntax, interface, runtime, timeout, correctness, or required-evidence failure. |
-| `EXECUTION_BLOCKED` | An operation was blocked by the execution environment, as reported by the adapter. |
 | `INFRA_ERROR` | Infrastructure failure; aborts evaluation rather than becoming algorithm fitness. |
 
 Failed candidates receive error diagnoses and feedback for the next generation. They do not receive behavioral preference evaluations. Eligible candidates receive `anomaly_analyst_count` independent initial analyses, followed by dependence checking, cross-review, evidence verification, and arbitration. Independent initial contexts do not guarantee statistical independence.
@@ -179,7 +178,7 @@ This limit covers preference comparisons only. Analysis, review, arbitration, ge
 
 Selection prefers correct, comparable executable candidates using the preference graph and code, strategy, and lineage diversity. `elite_count: 2` allows up to two elite survivors. An elite must have at least one consistent preference win and no recorded preference loss; if more qualify, diversity helps choose among them. Parents and offspring can qualify. If fewer than two qualify, selection does not invent additional elites; remaining population slots use the ordinary selection rules. `elite_count` must be smaller than P.
 
-If fewer than P candidates qualify for behavioral selection, the current implementation fills remaining slots from failed candidates, considering `INVALID` before `EXECUTION_BLOCKED`, then diversity. This is the implemented retention heuristic, not a behavioral quality score. Only retained failures receive repair offspring next round. An entirely failed population can continue evolving, but is not reported as deployable.
+If fewer than P candidates qualify for behavioral selection, the implementation fills remaining slots from failed candidates using code, strategy, and lineage diversity, with a seeded tie-breaker. All algorithm failures use `INVALID`; failure categories are preserved for diagnosis without establishing a selection priority. Only retained failures receive repair offspring next round. An entirely failed population can continue evolving, but is not reported as deployable.
 
 ## Commands and recovery
 
@@ -268,7 +267,7 @@ action = solve(observation, scenario.seed)
 
 The loader uses `spec_from_file_location`, `module_from_spec`, and `exec_module`; importing candidate code executes its top-level statements. The future execution worker must perform this loading inside its actual sandbox. The loader itself does not provide process isolation or resource enforcement.
 
-The adapter must return real algorithm failures as `INVALID` or `EXECUTION_BLOCKED`, or raise `AlgorithmExecutionError` with the original error details. Service failures use `InfrastructureError`. It must never repair or regenerate an algorithm during execution.
+The adapter must return real algorithm failures as `INVALID`, or raise `AlgorithmExecutionError` with the original error details. Service failures use `InfrastructureError`. It must never repair or regenerate an algorithm during execution.
 
 The `execution` settings describe the intended execution contract:
 

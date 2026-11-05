@@ -72,7 +72,7 @@ class Selector:
             # Invalid candidates only occupy places left by evaluated executable
             # candidates. No repair reservation, priority or fallback switch.
             while len(selected) < self.size:
-                chosen = min(invalid, key=lambda a: (a.status == Status.EXECUTION_BLOCKED, *diversity_key(a)))
+                chosen = min(invalid, key=diversity_key)
                 retain(chosen)
                 invalid.remove(chosen)
         report = SelectionReport(generation=generation,

@@ -1,0 +1,75 @@
+problem_id: port_route_planning
+spec: problems.port_route_planning.spec:SPEC
+template: template/algorithm.py.txt
+storage_root: runtime_data
+
+experiment:
+  population_size: 10
+  generations: 8
+  seed: 42
+
+genetics:
+  crossover_probability: 0.5
+  mutation_probability: 0.5
+  elite_count: 2
+
+evaluation:
+  anomaly_analyst_count: 3
+
+# TODO: 接入实际仿真接口和沙箱；当前 run 会明确 RUN_ABORTED。
+execution:
+  simulator: evolution.testing.simulator:PendingSimulator
+  env_image_hash: TODO
+  simulator_version: TODO
+  harness_hash: TODO
+  observation_schema_version: v1
+  external_inputs_hash: none
+  deterministic: true
+  cache_enabled: true
+  infra_retries: 1
+  timeout_seconds: 30
+  memory_mb: 512
+  environment: {}
+
+task:
+  task_id: port_route_planning
+  goal: "TODO: 填写具体问题目标"
+  inputs: {observation: "TODO: 真实观测结构"}
+  outputs: {action: "TODO: 真实决策结构"}
+  hard_constraints: ["TODO: 确定性业务正确性约束"]
+  allowed_changes: [algorithm.py]
+
+scenario_space:
+  version: v1
+  types: [coverage, boundary, exploration, regression]
+  parameter_ranges: {TODO: "真实合法参数范围"}
+  validity_rules: ["TODO: 真实场景合法性约束"]
+
+rubric:
+  rubric_version: v1
+  principles:
+    - "首先满足任务硬约束；只有真实行为证据支持的优势才参与偏好比较。"
+    - "关注稳定性、效率、鲁棒性及互补策略，不以异常条数代替质量。"
+  tradeoff_guidance: "按真实任务上下文解释取舍；证据不足时允许平局或不可比。"
+
+models:
+  local:
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen3.5-9B
+    structured_output: json_object
+    parameters: {temperature: 0.7}
+  cloud:
+    base_url: https://agi.tongji.edu.cn/v1
+    model: DeepSeek-V4.1-Flash
+    structured_output: json_object
+    parameters: {}
+
+agents:
+  generator: local
+  tester: local
+  analysts: [local]
+  independence: local
+  arbiter: local
+  preference: local
+
+core_scenarios: []

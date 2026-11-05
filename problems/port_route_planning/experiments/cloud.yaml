@@ -1,0 +1,8 @@
+# 按角色选择云 API；核心调用代码无需改动。
+agents:
+  generator: cloud
+  tester: cloud
+  analysts: [cloud]
+  independence: cloud
+  arbiter: cloud
+  preference: cloud

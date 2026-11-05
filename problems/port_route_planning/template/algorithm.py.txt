@@ -1,0 +1,7 @@
+def solve(observation: dict, seed: int) -> dict:
+    """TODO: fill in the problem's real observation/action contract.
+
+    The model replaces this template with an algorithm. Simulator adapters must
+    execute it inside their sandbox. This template is not a working algorithm.
+    """
+    raise NotImplementedError("TODO: real problem observation/action contract")

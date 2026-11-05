@@ -1,171 +1,270 @@
-# 种群式算法自进化框架
+# Population-Based Algorithm Evolution
 
-框架采用 **生成 → 测试 → 评估（含选择）→ 下一代生成**。每个生成名额只产生一次候选；源码有语法、接口、运行或提交问题时，保存原始输出和错误，继续交给后续阶段。本轮不会根据新发现的错误修复、重新生成或追加补测。评估完成后，下一代生成算子才能使用这些反馈。
+A framework organized around **generation → testing → evaluation and selection → next-generation generation**. Each generation slot produces one candidate. Invalid output, syntax errors, interface errors, and execution failures are preserved for testing and evaluation; they do not trigger repair within the same generation. Feedback becomes available to generation operators in the following generation.
 
-当前问题为 `port_route_planning`，真实仿真接口、观测/动作结构和领域正确性检查保留 TODO。完整 `run` 在接口未接入时记录 `RUN_ABORTED`；配置检查、准备、独立生成和场景构建可单独使用。
+The included problem is `port_route_planning`. Its real simulator, execution sandbox, observation/action contracts, and domain correctness checks remain **TODO**. With the current configuration, a full `run` records `RUN_ABORTED` during simulator preflight. Configuration validation, preparation, standalone generation, and scenario construction are available separately.
 
-## 目录
+## Repository layout
 
 ```text
 evolution/
-  generation/developer.py    # 一次生成；失败亲本修复，正常亲本随机交叉/变异
-  testing/                  # 黑盒场景、importlib.util 加载、执行和精确缓存
-  evaluation/               # 故障诊断、独立异常分析、裁决、偏好和选择
-  framework.py              # 每个问题实现的 ProblemSpec
-  llm.py                    # 统一 OpenAI SDK；load_dotenv 读取 .env
-  runner.py                 # 固定代数、阶段编排、断点恢复
-  storage.py                # 不可变制品、原子种群提交
+  generation/developer.py    # Generation and repair/crossover/mutation operators
+  testing/                  # Black-box scenarios, loading, execution, and caching
+  evaluation/               # Diagnosis, analysis, arbitration, preferences, selection
+  framework.py              # ProblemSpec extension contract
+  llm.py                    # OpenAI-compatible requests and dotenv credential loading
+  runner.py                 # Generation orchestration and recovery
+  storage.py                # Immutable artifacts and atomic population commits
 problems/port_route_planning/
-  problem.yaml              # 任务、场景空间、Rubric、模型和实验参数
-  spec.py                   # 场景校验、确定性正确性检查、反馈脱敏
-  template/algorithm.py.txt  # 本问题算法模板
-  experiments/              # 同一问题的配置覆盖：cloud / no_cache
-tests/                      # 框架测试，使用显式模型/仿真替身
-requirements.txt            # 仅固定四个运行核心库版本
+  problem.yaml              # Task, scenarios, rubric, models, and experiment settings
+  spec.py                   # Scenario validation, correctness, and feedback sanitization
+  template/algorithm.py.txt  # Problem-specific algorithm template
+  experiments/              # cloud and no_cache configuration overlays
+requirements.txt            # Pinned core runtime dependencies
 ```
 
-领域接口和独立问题目录的组织参考 [LACE](https://github.com/PJ-NTU/LACE)。执行服务放在测试模块，选择算子放在评估模块。
+The separation of framework services and self-contained problem directories follows the organization of [LACE](https://github.com/PJ-NTU/LACE). Execution belongs to testing; selection belongs to evaluation. There is currently no `tests/` directory in this repository.
 
-## 安装与启动
+## Installation
 
-Python ≥ 3.9。从项目根目录运行，无需安装项目包：
+Use Python 3.9 or later on Linux. The runner uses Unix file locking and directory synchronization. Run commands from the repository root; installing the project as a package is unnecessary.
 
 ```bash
-python3.9 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m evolution validate --problem port_route_planning
-.venv/bin/python -m evolution prepare --problem port_route_planning --run-id experiment_001
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m evolution validate --problem port_route_planning
+python -m evolution prepare --problem port_route_planning --run-id experiment_001
 ```
 
-测试依赖单独安装：`pip install pytest==8.4.2`，然后执行 `python -m pytest -q`。
+`requirements.txt` pins the four core libraries: `openai`, `pydantic`, `PyYAML`, and `python-dotenv`. Install vLLM separately in the environment serving the local model.
 
-## 每代如何工作
+`validate` checks configuration and referenced components and reports the derived comparison budget. It does not verify credentials, endpoint availability, or simulator readiness. CLI initialization can create the run directory. `prepare` saves configuration and source snapshots without calling a model or running the simulator.
 
-`experiment` 当前设置：
+## Models and credentials
+
+Create `.env` in the **repository root**. Both the profile-to-variable mapping and the actual key variable are required:
+
+```dotenv
+LLM_LOCAL_API_KEY_ENV=VLLM_API_KEY
+VLLM_API_KEY=local-development
+
+LLM_CLOUD_API_KEY_ENV=OPENAI_API_KEY
+OPENAI_API_KEY=replace-with-your-cloud-key
+```
+
+For profile `local`, `OpenAIClient` first reads `LLM_LOCAL_API_KEY_ENV`, then uses its value (`VLLM_API_KEY`) as the name of the environment variable containing the key. The mapping contains a variable name, not the secret itself. For a new profile `judge`, provide both `LLM_JUDGE_API_KEY_ENV=JUDGE_API_KEY` and `JUDGE_API_KEY=...`.
+
+The client calls `load_dotenv` on the repository-root `.env` with `override=False`: existing process environment variables take precedence at both lookup steps. A missing mapping or empty referenced key produces an explicit infrastructure error. Defining `OPENAI_API_KEY` or `VLLM_API_KEY` alone does not select a profile or create a mapping.
+
+Keep credentials and their variable-name mappings out of `problem.yaml`. The configuration schema does not accept `api_key` or `api_key_env` fields. Root `.env` is ignored by Git and excluded from run configuration snapshots. Files inside a problem directory are snapshotted, so do not place secrets there. Raw model responses are archived as experiment artifacts; treat their contents accordingly.
+
+The current `problem.yaml` contains these model profiles:
+
+```yaml
+models:
+  local:
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen3.5-9B
+    structured_output: json_object
+    parameters: {temperature: 0.7}
+  cloud:
+    base_url: https://agi.tongji.edu.cn/v1
+    model: DeepSeek-V4.1-Flash
+    structured_output: json_object
+    parameters: {}
+```
+
+`base_url` selects the endpoint; `model` is the model identifier exposed by that endpoint. These are the configured values, not a guarantee of endpoint or model availability. Optional profile settings include `timeout_seconds` (default 120) and `max_retries` (default 2). `parameters` supplies additional request arguments such as temperature; reserved fields are rejected.
+
+All requests use the OpenAI SDK's Chat Completions interface. A local vLLM server must expose the same protocol, for example:
+
+```bash
+vllm serve /path/to/model \
+  --served-model-name Qwen3.5-9B \
+  --host 127.0.0.1 --port 8000 \
+  --api-key local-development
+```
+
+The served name must match `models.local.model`, and the server key must match the key referenced by the local profile. `VLLM_API_KEY` is simply the credential variable used in this example.
+
+`agents` selects a profile explicitly for each role. All roles currently use `local`; configuring both profiles does not create automatic priority or fallback. `--experiment cloud` applies the supplied overlay to select `cloud` for all roles. `agents.analysts` accepts one shared profile or exactly `anomaly_analyst_count` profiles.
+
+`structured_output` is used in `evolution/llm.py` to build the request's `response_format`:
+
+- `json_object` requests a JSON object; the required schema is also included in the prompt.
+- `json_schema` sends the corresponding Pydantic JSON schema with `strict: false`; the endpoint must support it.
+
+Both modes validate the returned JSON against the expected Pydantic model. There is no automatic fallback between modes or endpoints.
+
+## Population evolution
+
+The current problem settings are:
 
 ```yaml
 experiment:
   population_size: 10
   generations: 8
   seed: 42
-```
 
-第 0 代生成 10 个候选，全部进入测试和评估并保存为初始种群。随后执行 8 代，每代从上代选出的种群产生 10 个后代，父子代共 20 个候选进入同一测试套件和评估，再由选择算子保留 10 个。
-
-生成阶段根据上一轮已经完成的评估结果分流。这里的亲本指上一轮选择算子保留的 P 个体；已淘汰的候选不会自动重新加入下一代。
-
-每个需要修复的亲本各生成一个 `REPAIR` 后代，剩余后代名额只从不需要修复的亲本中随机抽取来源，再随机选择交叉或变异：
-
-```yaml
 genetics:
   crossover_probability: 0.5
   mutation_probability: 0.5
-  elite_count: 1
+  elite_count: 2
+
+evaluation:
+  anomaly_analyst_count: 3
 ```
 
-- `REPAIR`：逐个处理上代保留的失败亲本，使用已记录的错误和评估反馈，每个亲本恰好生成一个修复后代。
-- `CROSSOVER`：只从不需要修复的亲本中随机选两个不同个体，生成重组后代。
-- `MUTATION`：只从不需要修复的亲本中随机选一个个体，生成变异后代。
+`population_size` is the number of retained individuals and offspring per generation. Generation 0 creates and evaluates 10 candidates and retains the initial population. `generations: 8` then performs eight additional evolution rounds. Each round generates 10 offspring, tests and evaluates the 20 parent/offspring candidates on the same scenario suite, and selects 10 survivors. `seed` controls framework randomness; it does not guarantee reproducibility of remote model responses.
 
-交叉和变异的概率之和必须为 1，只用于非修复名额。`repair_probability` 已移除，修复数量由实际需要修复的亲本数决定，不设置固定修复配额或修复存活名额。`elite_count` 仍仅由评估选择使用。
+### Generation operators
 
-例如 P=10，上一轮保留的 A、B 需要修复，则下一轮为 A、B 各生成一个修复后代，其余 8 个后代通过正常亲本的交叉或变异生成。只有一个正常亲本时，非修复名额使用变异，并在操作记录中注明；全部亲本都失败时，下一轮生成 P 个修复后代。
+Only parents retained by the previous selection participate in the next generation. Each retained parent whose assessment is non-executable or fails correctness receives exactly one `REPAIR` offspring. Remaining offspring slots use healthy parents:
 
-本轮新产生的错误只交给评估记录，不能反过来触发本轮的修复。修复后代仍然失败时，也必须完成本轮测试、评估和选择，若被保留，才在再下一轮继续修复。`offspring_manifest.json` 保存修复对象、可参与交叉/变异的亲本及实际算子数量。
+- `CROSSOVER` selects two distinct healthy parents and generates a recombination.
+- `MUTATION` selects one healthy parent and generates a variation.
 
-每次模型输出均保留独立候选 ID。重复源码继续进入测试和评估，代码哈希用于原始运行缓存及选择多样性。输出格式错误、缺少 `algorithm.py` 或文件路径无法合法写入时，保存完整原始输出并记录生成错误；候选仍进入故障评估，不伪造运行轨迹。
+The crossover and mutation probabilities must sum to 1 and apply only to non-repair slots. With one healthy parent, these slots use mutation and record the reason. If every parent needs repair, all offspring are repair attempts. There is no `repair_probability`, fixed repair quota, or guaranteed survival for failed candidates.
 
-评估先检查可运行性与硬约束。具备有效行为的候选进行 m 个独立首轮分析、依赖检验、交叉审查、证据核验、单一裁决及匿名换序偏好比较。失败者保存真实错误诊断，不参与行为质量比较。选择优先保留评估合格的可运行候选；数量不足时，从其余候选中按错误类别和多样性规则保留后续进化材料。全为失败候选时仍可进化，但不报告可靠行为质量或可部署算法。
+For example, if retained parents A and B fail, the next generation creates one repair offspring for A and one for B; the other eight slots use crossover or mutation among healthy parents. A failed repair must complete testing, evaluation, and selection before it can receive another repair in a later generation. Failures discovered in the current generation never trigger a repair in that generation.
 
-偏好比较预算由 `population_size` 自动推导，无需在 YAML 中填写 `comparison_budget_per_generation`。最多有 `2P` 个父子候选，全部两两比较并交换顺序复评，调用上限为 `2P × (2P - 1)`。实际仅比较具备比较资格的 K 个候选，执行 `K × (K - 1)` 次调用，覆盖全部配对。例如 P=10 时上限为 380 次；若只有 10 个候选可比较，则执行 90 次。第 0 代只有 P 个候选，按实际人数计算。这些调用数只计偏好比较，不包含异常分析和裁决。每代的 `evaluation/comparison_summary.json` 保存自动上限、实际人数、配对数和调用数。
+Each slot makes one generation request and receives an independent candidate ID. Duplicate source code is allowed. Malformed output, missing `algorithm.py`, and invalid proposed file paths are archived as generation errors and passed to evaluation without fabricated execution traces. Infrastructure failures can abort the run; bounded transport retries do not modify candidate source code. Initial strategy planning is a separate model request and must succeed before a complete initial batch can be produced.
 
-已删除同轮生成重试、失败槽位、生成准入审查及修复配额相关代码和配置。基础设施不可用仍显式中断；基础设施的有限请求重试不修改任何候选源码。
+### Testing and scenarios
 
-## 模型和密钥
+The tester constructs black-box scenarios using the task, scenario space, coverage, and sanitized behavioral feedback. It does not receive candidate source code or lineage.
 
-项目根目录 `.env` 填写：
+`core_scenarios` contains predefined scenarios. An empty list means no predefined scenarios; scenario construction still calls the tester model. A scenario has this shape:
 
-```dotenv
-LLM_CLOUD_API_KEY_ENV=OPENAI_API_KEY
-OPENAI_API_KEY=your-cloud-api-key
-LLM_LOCAL_API_KEY_ENV=VLLM_API_KEY
-VLLM_API_KEY=local-development
+```yaml
+core_scenarios:
+  - scenario_id: baseline_001
+    inputs:
+      replace_with_real_input_field: 1
+    seed: 42
+    purpose: Baseline coverage
 ```
 
-`OpenAIClient` 使用 `load_dotenv` 读取 `.env`，已有进程环境变量优先。`LLM_<PROFILE大写>_API_KEY_ENV` 指定该 profile 使用的密钥变量名，实际密钥保存在对应变量中。例如新增 `judge` 模型时，在 `.env` 配置 `LLM_JUDGE_API_KEY_ENV=JUDGE_API_KEY` 和 `JUDGE_API_KEY=...`。映射缺失或密钥为空时明确报错；密钥变量名和值均不进入问题配置和配置快照。
+The example input is illustrative: replace it with the real simulator inputs and implement domain validation in `spec.py`. The current specification only checks basic scenario structure and retains TODOs for domain rules.
 
-`problem.yaml` 的 `models` 只配置各端点的 `base_url`、`model` 和调用参数，不包含凭据字段；`agents` 选择各角色使用哪个模型配置。所有调用使用同一个 OpenAI SDK 客户端协议；本地模型由 vLLM 提供 OpenAI 兼容服务。例如在单独的 vLLM 环境启动：
+The suite combines predefined, historical, regression, and newly generated scenarios. Identical inputs and seeds are deduplicated; reusing a scenario ID with different contents is rejected. The entire generation-0 suite becomes the frozen core for subsequent rounds, and later adaptive scenarios accumulate. Parents and offspring are evaluated against the same current suite.
+
+### Evaluation and comparison budget
+
+Evaluation first checks execution evidence and hard correctness constraints:
+
+| Status | Meaning |
+|---|---|
+| `EXECUTABLE` | Valid execution and behavior evidence that passes correctness checks. |
+| `INVALID` | Generation, syntax, interface, runtime, timeout, correctness, or required-evidence failure. |
+| `EXECUTION_BLOCKED` | An operation was blocked by the execution environment, as reported by the adapter. |
+| `INFRA_ERROR` | Infrastructure failure; aborts evaluation rather than becoming algorithm fitness. |
+
+Failed candidates receive error diagnoses and feedback for the next generation. They do not receive behavioral preference evaluations. Eligible candidates receive `anomaly_analyst_count` independent initial analyses, followed by dependence checking, cross-review, evidence verification, and arbitration. Independent initial contexts do not guarantee statistical independence.
+
+`comparison_budget_per_generation` is a **derived property**, used by the evaluation preference-comparison stage. Do not put it in YAML. For population size P, its upper limit is:
+
+```text
+maximum pool = 2P
+comparison calls = 2P × (2P - 1)
+```
+
+Every eligible pair is compared twice, with the order swapped. For K eligible candidates, the stage performs `K × (K - 1)` logical comparison calls, covering all pairs. With P=10, the maximum is 380 calls for 190 pairs. With K=10, it is 90 calls for 45 pairs. Generation 0 has only P candidates. Inconsistent swapped-order judgments become incomparable.
+
+This limit covers preference comparisons only. Analysis, review, arbitration, generation, scenario construction, and SDK retries consume additional requests. `evaluation/comparison_summary.json` records the limit, eligible count, pair count, and actual comparison calls.
+
+### Selection and elites
+
+Selection prefers correct, comparable executable candidates using the preference graph and code, strategy, and lineage diversity. `elite_count: 2` allows up to two elite survivors. An elite must have at least one consistent preference win and no recorded preference loss; if more qualify, diversity helps choose among them. Parents and offspring can qualify. If fewer than two qualify, selection does not invent additional elites; remaining population slots use the ordinary selection rules. `elite_count` must be smaller than P.
+
+If fewer than P candidates qualify for behavioral selection, the current implementation fills remaining slots from failed candidates, considering `INVALID` before `EXECUTION_BLOCKED`, then diversity. This is the implemented retention heuristic, not a behavioral quality score. Only retained failures receive repair offspring next round. An entirely failed population can continue evolving, but is not reported as deployable.
+
+## Commands and recovery
 
 ```bash
-vllm serve /path/to/model --served-model-name algorithm-model --host 127.0.0.1 --port 8000 --api-key local-development
-```
-
-默认角色使用 `local`。使用 `--experiment cloud` 可切换全部角色到 `cloud`；先填写云端实际模型名及密钥。`agents.analysts` 可指定一个共享 profile 或恰好 m 个 profile，每次分析均为无共享历史的独立会话。
-
-模型输出按 Pydantic Schema 校验，默认使用 `json_object`；端点支持时可显式配置 `json_schema`（`strict: false`）。没有失败后自动切换协议的兼容分支。
-
-## 独立生成、完整实验与恢复
-
-```bash
+# Save candidates without executing or committing a population.
 python -m evolution generate --problem port_route_planning --run-id generation_001
+
+# Construct scenarios without executing candidates.
 python -m evolution build-suite --problem port_route_planning --run-id scenarios_001
-# 完成实际仿真与领域契约接入后：
+
+# After implementing the simulator, sandbox, and domain contracts:
 python -m evolution run --problem port_route_planning --run-id experiment_001
+python -m evolution run --problem port_route_planning --experiment cloud --run-id cloud_001
 python -m evolution run --problem port_route_planning --experiment no_cache --run-id no_cache_001
 ```
 
-独立生成保存全部候选，状态为 `GENERATED_UNTESTED`，不提交种群。完整实验只在第 0 代及后续 N 代全部完成后标记 `COMPLETED`。恢复时使用相同 run ID；配置、问题文件和框架源码均已冻结，改变流程或实验设置时使用新的 run ID。
+Standalone generation reports `GENERATED_UNTESTED`; standalone scenario construction reports `SUITE_BUILT_UNEXECUTED`. Both require working model credentials. A full experiment reports `COMPLETED` only after generation 0 and all configured evolution rounds finish.
 
-## 中间产物
+Reuse the same run ID and configuration to resume a full run. Committed populations are recovered atomically. Complete saved offspring and scenario stages can be reused; partially written stages may be regenerated in a new attempt. Attempt directories record recovery attempts, not same-generation algorithm repair loops.
+
+Resolved configuration, problem files, and framework Python source are frozen for a run. Use a new run ID after changing these inputs. Root `.env` and README are outside that fingerprint. Recently reviewed memory events provide feedback to subsequent generation requests.
+
+## Saved artifacts
+
+Artifacts are organized under `runtime_data/<problem_id>/<run_id>/`:
 
 ```text
-runtime_data/<problem_id>/<run_id>/
-  config/                       # 解析配置、问题和框架文件快照
-  individuals/<id>/             # code/、源码清单、元数据、谱系、补丁
-  generations/gen_0000/attempts/<UTC时间_ID>/
-    strategy_plan.json          # 初始策略
-    generation/slot_000/        # 单次输出、LLM 请求/响应/校验记录
-    generation/offspring_manifest.json
-    testing/                    # 场景、执行引用、覆盖和实际错误
-    evaluation/                 # 正确性、故障、首稿、审查、证据、偏好、选择
-    runtime_state.json
-    memory_event.json
-  populations/                  # 各代不可变种群及原子当前指针
-  objects/                      # 内容寻址的原始运行、日志、证据和快照
-  execution_cache/              # 精确执行键索引
-  memory/                       # 已审查的事件
-  events/                       # 缓存损坏、中断等事件
-  standalone/                   # 独立生成和场景构建
-  experiment_manifest.json      # 完成代数、个体状态、部署候选、中断原因
+config/                         # Resolved configuration and source snapshots
+individuals/<id>/               # Code, source manifest, metadata, lineage, patches
+generations/gen_0000/attempts/<attempt_id>/
+  strategy_plan.json            # Initial strategy planning
+  generation/slot_000/           # Model requests, responses, validation, output
+  generation/offspring_manifest.json
+  testing/                      # Scenarios, execution references, coverage, errors
+  evaluation/                   # Diagnoses, analyses, reviews, preferences, selection
+  runtime_state.json
+  memory_event.json
+populations/                    # Immutable population commits and current pointer
+objects/                        # Content-addressed runs, logs, evidence, snapshots
+execution_cache/                # Exact execution-key index
+memory/                         # Reviewed events
+events/                         # Abort and cache-corruption events
+standalone/                     # Standalone generation and scenario artifacts
+experiment_manifest.json        # Progress, statuses, deployable IDs, abort reason
 ```
 
-`attempts` 用于进程中断后的恢复记录，不是同轮修复循环。完整阶段可从已有产物恢复，不重新生成。模型原始响应、无法写入的文件提案和每个错误都会归档。
+Raw model responses and generation failures are preserved. The offspring manifest records repair parents, eligible variation parents, and actual operator counts.
 
-执行缓存绑定代码、场景、种子、环境、执行参数和版本指纹。相同代码的多个候选可引用同一个不可变原始运行，`RunUse.individual_id` 标明使用者，原始记录中的 ID 保留实际运行来源。生成错误记录明确标注 `GENERATION_ERROR`，不计为真实仿真调用，也不写入运行缓存。缓存损坏重新执行；非确定性模式统一重采样父子代。
+Execution caching binds source code, scenario, seed, environment and execution settings, and version fingerprints. It requires caching and deterministic mode to be enabled in configuration and a deterministic adapter. Identical source code can share an immutable raw execution record across candidate IDs; `RunUse.individual_id` identifies its consumer while the original record retains its execution owner. Generation errors are marked `GENERATION_ERROR`, do not count as simulator calls, and are not execution-cache entries. Corrupt cache entries trigger execution again. Nondeterministic mode resamples both parents and offspring. Subjective model evaluations are not execution-cache results.
 
-## 接入问题与仿真 TODO
+## Adding problems and connecting the simulator
 
-每个问题在 `problems/<problem_id>/` 中实现：
+Keep each problem's configuration, template, domain implementation, and experiment overlays together under `problems/<problem_id>/`:
 
-| 文件/方法 | 职责 |
+| Component | Responsibility |
 |---|---|
-| `problem.yaml` | 任务、场景、Rubric、模型和进化配置 |
-| `spec.validate_scenario` | 根据真实参数范围校验场景 |
-| `spec.check_correctness` | 根据真实运行结果检查硬约束 |
-| `spec.sanitize_feedback` | 仅输出场景 ID 和脱敏行为症状 |
-| `template/algorithm.py.txt` | 约定 `solve(observation, seed) -> dict` |
-| `experiments/<name>.yaml` | 对默认配置递归合并字典，列表整体替换 |
+| `problem.yaml` | Problem ID, task contracts, scenarios, rubric, profiles, role assignments, experiment settings. |
+| `spec` reference | Importable `ProblemSpec` object, such as `problems.port_route_planning.spec:SPEC`. |
+| `validate_scenario` | Validate real scenario inputs and ranges. |
+| `check_correctness` | Check hard domain constraints against actual execution results. |
+| `sanitize_feedback` | Expose only scenario identifiers and sanitized behavioral symptoms to testing. |
+| `template/algorithm.py.txt` | Define `solve(observation, seed) -> dict`. |
+| `experiments/<name>.yaml` | Override defaults; dictionaries merge recursively and lists replace existing lists. |
 
-未来仿真适配器配置到 `execution.simulator`，在执行进程中使用：
+`execution.simulator` uses an import reference of the form `module:Class`. Its current value, `evolution.testing.simulator:PendingSimulator`, intentionally aborts preflight. A real adapter must implement the contract in `evolution/testing/simulator.py`, verify its environment, and supply actual evidence.
+
+Generated algorithms are loaded with `importlib.util` through the provided loader:
 
 ```python
 from evolution.testing import load_algorithm
 
 solve = load_algorithm(code_directory / "algorithm.py")
 action = solve(observation, scenario.seed)
-# TODO: 送入真实仿真器，记录实际行为与错误。
+# TODO: send the action to the real simulator and record actual behavior/errors.
 ```
 
-加载器使用 `importlib.util.spec_from_file_location → module_from_spec → exec_module`。适配器返回 `INVALID` 表示算法语法、接口、运行或超时错误，也可抛出包含真实错误和类别的 `AlgorithmExecutionError`；执行器记录后继续。返回 `EXECUTION_BLOCKED` 表示操作被执行环境阻止，这类候选同样进入评估。服务故障抛 `InfrastructureError`。适配器不得根据运行错误在本轮调用生成模型修改代码。
+The loader uses `spec_from_file_location`, `module_from_spec`, and `exec_module`; importing candidate code executes its top-level statements. The future execution worker must perform this loading inside its actual sandbox. The loader itself does not provide process isolation or resource enforcement.
 
-测试使用显式替身验证框架，不代表真实模型、仿真或执行隔离已接入。
+The adapter must return real algorithm failures as `INVALID` or `EXECUTION_BLOCKED`, or raise `AlgorithmExecutionError` with the original error details. Service failures use `InfrastructureError`. It must never repair or regenerate an algorithm during execution.
+
+The `execution` settings describe the intended execution contract:
+
+- `env_image_hash`, `simulator_version`, `harness_hash`, `observation_schema_version`, and `external_inputs_hash` identify result-affecting versions and inputs. Replace the `TODO` fingerprints before running a real experiment.
+- `deterministic` and `cache_enabled` control deterministic execution and cache eligibility.
+- `infra_retries: 1` permits one retry after an execution infrastructure failure. Algorithm failures are not retried as repairs.
+- `timeout_seconds` and `memory_mb` specify limits that the real sandbox must enforce.
+- `environment` supplies adapter-specific environment configuration; it is snapshotted and must not contain secrets.
+
+**Remaining TODOs:** connect the real simulator and sandbox, define observation/action schemas and valid scenario ranges, implement domain correctness checks, and replace placeholder execution fingerprints. The repository currently provides the framework and adapter contracts, not a completed simulation environment.

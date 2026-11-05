@@ -27,7 +27,7 @@ class EvaluationConfig(Model):
 
 
 class ExecutionConfig(Model):
-    simulator: str = "evolution.testing.simulator:PendingSimulator"
+    simulator: str
     cache_enabled: bool = True
     deterministic: bool = True
     environment: dict[str, Any] = Field(default_factory=dict)
@@ -95,7 +95,7 @@ class ProblemConfig(Model):
     experiment: ExperimentConfig = Field(default_factory=ExperimentConfig)
     genetics: GeneticsConfig = Field(default_factory=GeneticsConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
-    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    execution: ExecutionConfig
     task: TaskSpec
     scenario_space: ScenarioSpace
     rubric: Rubric

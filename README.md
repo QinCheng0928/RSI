@@ -11,19 +11,20 @@ evolution/
   generation/developer.py    # Generation and repair/crossover/mutation operators
   testing/                  # Black-box scenarios, loading, execution, and caching
   evaluation/               # Diagnosis, analysis, arbitration, preferences, selection
-  framework.py              # ProblemSpec extension contract
+  framework.py              # Shared ProblemSpec and Simulator contracts
   llm.py                    # OpenAI-compatible requests and dotenv credential loading
   runner.py                 # Generation orchestration and recovery
   storage.py                # Immutable artifacts and atomic population commits
 problems/port_route_planning/
   problem.yaml              # Task, scenarios, rubric, models, and experiment settings
   spec.py                   # Scenario validation, correctness, and feedback sanitization
+  simulator.py              # Problem-specific adapter for the external simulator (TODO)
   template/algorithm.py.txt  # Problem-specific algorithm template
   experiments/              # cloud and no_cache configuration overlays
 requirements.txt            # Pinned core runtime dependencies
 ```
 
-The separation of framework services and self-contained problem directories follows the organization of [LACE](https://github.com/PJ-NTU/LACE). Execution belongs to testing; selection belongs to evaluation. There is currently no `tests/` directory in this repository.
+The separation of framework services and self-contained problem directories follows the organization of [LACE](https://github.com/PJ-NTU/LACE). Testing orchestrates execution and caching through a shared simulator interface; each problem owns its concrete simulator adapter. Selection belongs to evaluation. There is currently no `tests/` directory in this repository.
 
 ## Installation
 
@@ -237,13 +238,23 @@ Keep each problem's configuration, template, domain implementation, and experime
 |---|---|
 | `problem.yaml` | Problem ID, task contracts, scenarios, rubric, profiles, role assignments, experiment settings. |
 | `spec` reference | Importable `ProblemSpec` object, such as `problems.port_route_planning.spec:SPEC`. |
+| `simulator.py` | Problem-specific adapter implementing the shared `Simulator` interface for an external simulation environment. |
 | `validate_scenario` | Validate real scenario inputs and ranges. |
 | `check_correctness` | Check hard domain constraints against actual execution results. |
 | `sanitize_feedback` | Expose only scenario identifiers and sanitized behavioral symptoms to testing. |
 | `template/algorithm.py.txt` | Define `solve(observation, seed) -> dict`. |
 | `experiments/<name>.yaml` | Override defaults; dictionaries merge recursively and lists replace existing lists. |
 
-`execution.simulator` uses an import reference of the form `module:Class`. Its current value, `evolution.testing.simulator:PendingSimulator`, intentionally aborts preflight. A real adapter must implement the contract in `evolution/testing/simulator.py`, verify its environment, and supply actual evidence.
+`execution.simulator` is required and uses an import reference of the form `module:Class`. Each problem explicitly selects its own adapter; there is no framework-default simulator. The current port-route-planning setting is:
+
+```yaml
+execution:
+  simulator: problems.port_route_planning.simulator:PendingSimulator
+```
+
+This placeholder lives in the problem directory and intentionally aborts preflight. When connecting another task, place its adapter in `problems/<problem_id>/simulator.py` and reference that class in its own `problem.yaml`. Experiment overlays can select different adapters for the same problem. Configured classes are instantiated without arguments; execution settings are passed to their methods.
+
+Every adapter implements `Simulator` from `evolution/framework.py`: `sandboxed` and `deterministic` capability attributes, `preflight(config) -> None`, and `run(code_directory, scenario, config) -> SimulatorResult`. The actual simulation environment may run outside this repository; the adapter owns task-specific transport and input/action translation. Testing consumes this common interface and handles execution records, infrastructure retries, evidence, and caching without importing any concrete problem adapter directly.
 
 Generated algorithms are loaded with `importlib.util` through the provided loader:
 

@@ -6,10 +6,10 @@ from pydantic import ValidationError
 
 from evolution.config import ExecutionConfig
 from evolution.errors import AlgorithmExecutionError, ContractError, InfrastructureError
+from evolution.framework import Simulator
 from evolution.models import (Coverage, Evidence, ExecutionKey, ExecutionRecord, Individual,
                               RunUse, Scenario, ScenarioSuite, SimulatorResult, Status, digest)
 from evolution.storage import Store
-from evolution.testing.simulator import Simulator
 
 
 class Executor:

@@ -8,13 +8,12 @@ from typing import Optional
 from evolution.config import ProblemConfig, config_fingerprint, load_symbol
 from evolution.errors import ContractError, EvolutionError
 from evolution.evaluation import Evaluator, Selector
-from evolution.framework import ProblemSpec
+from evolution.framework import ProblemSpec, Simulator
 from evolution.generation import Developer
 from evolution.llm import LLM, OpenAIClient
 from evolution.models import Assessment, Individual, Population, Scenario, ScenarioSuite, Status
 from evolution.storage import Store
 from evolution.testing import Executor, Tester
-from evolution.testing.simulator import Simulator
 
 
 @contextmanager

@@ -11,15 +11,15 @@ from evolution.models import Model, digest
 
 
 class ExperimentConfig(Model):
-    population_size: int = Field(default=4, ge=2)
-    generations: int = Field(default=10, ge=0)
-    seed: int = 2026
+    population_size: int = Field(default=10, ge=2)
+    generations: int = Field(default=8, ge=0)
+    seed: int = 42
 
 
 class GeneticsConfig(Model):
     crossover_probability: float = Field(default=0.5, ge=0, le=1)
     mutation_probability: float = Field(default=0.5, ge=0, le=1)
-    elite_count: int = Field(default=1, ge=0)
+    elite_count: int = Field(default=2, ge=0)
 
 
 class EvaluationConfig(Model):

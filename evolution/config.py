@@ -31,7 +31,7 @@ class ExecutionConfig(Model):
     cache_enabled: bool = True
     deterministic: bool = True
     environment: dict[str, Any] = Field(default_factory=dict)
-    env_image_hash: str = "TODO"
+    # Version of the complete Python simulation: environment, dynamics, and dependencies.
     simulator_version: str = "TODO"
     harness_hash: str = "TODO"
     observation_schema_version: str = "v1"

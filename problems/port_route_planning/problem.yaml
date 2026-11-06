@@ -19,7 +19,7 @@ evaluation:
 # TODO: 接入实际仿真接口和沙箱；当前 run 会明确 RUN_ABORTED。
 execution:
   simulator: problems.port_route_planning.simulator:PendingSimulator
-  env_image_hash: TODO
+  # Complete Python simulation version: road environment, dynamics, and dependencies.
   simulator_version: TODO
   harness_hash: TODO
   observation_schema_version: v1

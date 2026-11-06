@@ -1,8 +1,10 @@
-"""Port-route-planning adapter for the external simulation environment.
+"""Port-route-planning Python simulation integration.
 
 TODO: connect the actual simulator and sandbox using evolution.framework.Simulator.
-Keep task-specific transport, input/action translation, and execution integration
-here. No synthetic execution records are produced while integration is pending.
+Keep the coupled road environment, dynamics models, and execution integration in
+this problem directory. execution.simulator_version identifies their combined
+implementation and dependencies. No synthetic execution records are produced
+while integration is pending.
 """
 from pathlib import Path
 

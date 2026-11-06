@@ -1,4 +1,3 @@
-# Select the cloud API for each role without changing the core calling code.
 agents:
   generator: cloud
   tester: cloud

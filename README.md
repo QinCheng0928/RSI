@@ -18,7 +18,7 @@ evolution/
 problems/port_route_planning/
   problem.yaml              # Task, scenarios, rubric, models, and experiment settings
   spec.py                   # Scenario validation, correctness, and feedback sanitization
-  simulator.py              # Problem-specific adapter for the external simulator (TODO)
+  simulator.py              # Problem-owned Python simulation integration (TODO)
   template/algorithm.py.txt  # Problem-specific algorithm template
   experiments/              # cloud and no_cache configuration overlays
 requirements.txt            # Pinned core runtime dependencies
@@ -226,7 +226,7 @@ experiment_manifest.json        # Progress, statuses, deployable IDs, abort reas
 
 Raw model responses and generation failures are preserved. The offspring manifest records repair parents, eligible variation parents, and actual operator counts.
 
-Execution caching binds source code, scenario, seed, environment and execution settings, and version fingerprints. It requires caching and deterministic mode to be enabled in configuration and a deterministic adapter. Identical source code can share an immutable raw execution record across candidate IDs; `RunUse.individual_id` identifies its consumer while the original record retains its execution owner. Generation errors are marked `GENERATION_ERROR`, do not count as simulator calls, and are not execution-cache entries. Corrupt cache entries trigger execution again. Nondeterministic mode resamples both parents and offspring. Subjective model evaluations are not execution-cache results.
+Execution caching binds source code, scenario, seed, the combined Python simulation version, execution settings, and other version fingerprints. It requires caching and deterministic mode to be enabled in configuration and a deterministic adapter. Identical source code can share an immutable raw execution record across candidate IDs; `RunUse.individual_id` identifies its consumer while the original record retains its execution owner. Generation errors are marked `GENERATION_ERROR`, do not count as simulator calls, and are not execution-cache entries. Corrupt cache entries trigger execution again. Nondeterministic mode resamples both parents and offspring. Subjective model evaluations are not execution-cache results.
 
 ## Adding problems and connecting the simulator
 
@@ -236,7 +236,7 @@ Keep each problem's configuration, template, domain implementation, and experime
 |---|---|
 | `problem.yaml` | Problem ID, task contracts, scenarios, rubric, profiles, role assignments, experiment settings. |
 | `spec` reference | Importable `ProblemSpec` object, such as `problems.port_route_planning.spec:SPEC`. |
-| `simulator.py` | Problem-specific adapter implementing the shared `Simulator` interface for an external simulation environment. |
+| `simulator.py` | Problem-owned Python simulation entry point implementing `Simulator`; road/environment and dynamics modules can live alongside it. |
 | `validate_scenario` | Validate real scenario inputs and ranges. |
 | `check_correctness` | Check hard domain constraints against actual execution results. |
 | `sanitize_feedback` | Expose only scenario identifiers and sanitized behavioral symptoms to testing. |
@@ -252,7 +252,7 @@ execution:
 
 This placeholder lives in the problem directory and intentionally aborts preflight. When connecting another task, place its adapter in `problems/<problem_id>/simulator.py` and reference that class in its own `problem.yaml`. Experiment overlays can select different adapters for the same problem. Configured classes are instantiated without arguments; execution settings are passed to their methods.
 
-Every adapter implements `Simulator` from `evolution/framework.py`: `sandboxed` and `deterministic` capability attributes, `preflight(config) -> None`, and `run(code_directory, scenario, config) -> SimulatorResult`. The actual simulation environment may run outside this repository; the adapter owns task-specific transport and input/action translation. Testing consumes this common interface and handles execution records, infrastructure retries, evidence, and caching without importing any concrete problem adapter directly.
+Every simulator implements `Simulator` from `evolution/framework.py`: `sandboxed` and `deterministic` capability attributes, `preflight(config) -> None`, and `run(code_directory, scenario, config) -> SimulatorResult`. A problem can implement its road environment and dynamics together in Python, using `simulator.py` as the entry point and additional modules in the same problem directory. No container image is required for version identification. Testing consumes the common interface and handles execution records, infrastructure retries, evidence, and caching without importing any concrete problem simulator directly. Candidate execution isolation remains the simulator worker's responsibility.
 
 Generated algorithms are loaded with `importlib.util` through the provided loader:
 
@@ -270,10 +270,11 @@ The adapter must return real algorithm failures as `INVALID`, or raise `Algorith
 
 The `execution` settings describe the intended execution contract:
 
-- `env_image_hash`, `simulator_version`, `harness_hash`, `observation_schema_version`, and `external_inputs_hash` identify result-affecting versions and inputs. Replace the `TODO` fingerprints before running a real experiment.
+- `simulator_version` identifies the complete coupled Python simulation: road/environment implementation, dynamics models, fixed simulation data, and relevant dependency versions. Use a release identifier, commit, or combined fingerprint, and update it when any of these change. There is no separate environment-image version. The framework stores this value in execution records and cache keys; it does not calculate or verify the version automatically. The simulator's `preflight` must verify it against the actual implementation.
+- `harness_hash`, `observation_schema_version`, and `external_inputs_hash` identify the execution harness, observation contract, and external inputs. Replace the `TODO` version/fingerprint values before running a real experiment.
 - `deterministic` and `cache_enabled` control deterministic execution and cache eligibility.
 - `infra_retries: 1` permits one retry after an execution infrastructure failure. Algorithm failures are not retried as repairs.
 - `timeout_seconds` and `memory_mb` specify limits that the real sandbox must enforce.
-- `environment` supplies adapter-specific environment configuration; it is snapshotted and must not contain secrets.
+- `environment` supplies problem-specific simulation settings, such as a time step or road-model parameters; it is snapshotted and included in the execution cache key, and must not contain secrets. Per-scenario inputs remain in `Scenario.inputs`.
 
 **Remaining TODOs:** connect the real simulator and sandbox, define observation/action schemas and valid scenario ranges, implement domain correctness checks, and replace placeholder execution fingerprints. The repository currently provides the framework and adapter contracts, not a completed simulation environment.

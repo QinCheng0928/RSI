@@ -22,14 +22,14 @@ class Executor:
         self.simulator.preflight(self.cfg)
         if not self.simulator.sandboxed:
             raise InfrastructureError("simulator adapter must provide a real execution sandbox")
-        if any(value == "TODO" for value in (self.cfg.env_image_hash, self.cfg.simulator_version, self.cfg.harness_hash)):
-            raise InfrastructureError("environment/simulator/harness fingerprints must be configured")
+        if any(value == "TODO" for value in (self.cfg.simulator_version, self.cfg.harness_hash)):
+            raise InfrastructureError("simulator version and harness fingerprint must be configured")
         if self.cfg.cache_enabled and self.cfg.deterministic and not self.simulator.deterministic:
             raise InfrastructureError("adapter cannot guarantee the configured deterministic cache semantics")
 
     def key(self, individual: Individual, scenario: Scenario) -> ExecutionKey:
         return ExecutionKey(code_hash=individual.code_hash, scenario_content_hash=scenario.content_hash,
-            env_image_hash=self.cfg.env_image_hash, simulator_version=self.cfg.simulator_version,
+            simulator_version=self.cfg.simulator_version,
             config_hash=digest({"environment": self.cfg.environment, "contract": self.contract_hash,
                 "timeout_seconds": self.cfg.timeout_seconds, "memory_mb": self.cfg.memory_mb}),
             seed=scenario.seed, harness_hash=self.cfg.harness_hash,

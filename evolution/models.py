@@ -81,7 +81,6 @@ class ScenarioSuite(Model):
 class ExecutionKey(Model):
     code_hash: str
     scenario_content_hash: str
-    env_image_hash: str
     simulator_version: str
     config_hash: str
     seed: int

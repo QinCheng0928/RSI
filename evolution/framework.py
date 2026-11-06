@@ -1,4 +1,4 @@
-"""Shared contracts for problem specifications and external simulator adapters."""
+"""Shared contracts for problem specifications and problem-owned simulators."""
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Protocol
@@ -11,15 +11,19 @@ class Simulator(Protocol):
     """Uniform interface implemented by each problem's simulator adapter.
 
     Concrete adapters belong in problems/<problem_id>/, alongside domain code.
-    They may connect to an external service or manage a local simulator worker.
+    They may implement a coupled Python environment/dynamics model in a local
+    worker or connect to an external service. simulator_version identifies the
+    complete simulation, including its environment, dynamics, and dependencies.
     """
 
     sandboxed: bool
     deterministic: bool
 
     def preflight(self, config: ExecutionConfig) -> None:
-        """Verify service health, version fingerprints, and resource isolation.
+        """Verify simulation readiness, version fingerprints, and resource isolation.
 
+        Check simulator_version against the complete environment/dynamics
+        implementation and dependencies, not just the adapter's source version.
         Raise InfrastructureError if the environment is unavailable or invalid.
         """
         ...

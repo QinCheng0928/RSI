@@ -12,7 +12,7 @@ from evolution.storage import Store
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generation → testing (execution/caching) → evaluation (selection)")
-    parser.add_argument("command", choices=["validate", "prepare", "generate", "build-suite", "run"])
+    parser.add_argument("command", choices=["prepare", "generate", "build-suite", "run"])
     parser.add_argument("--problem", default="port_route_planning", help="Problem directory name under problems/")
     parser.add_argument("--run-id", default=None, help="Reuse the same ID to resume from the last committed generation")
     parser.add_argument("--experiment", help="YAML configuration overlay name under the problem's experiments/ directory")
@@ -26,11 +26,6 @@ def main() -> int:
         parser.error("invalid run ID")
     root = Path(cfg.storage_root) / cfg.problem_id / run_id
     engine = Evolution(cfg, directory, Store(root))
-    if args.command == "validate":
-        print(json.dumps({"valid": True, "problem_id": cfg.problem_id,
-            "comparison_budget_per_generation": cfg.comparison_budget_per_generation,
-            "config_hash": engine.fingerprint, "simulator": cfg.execution.simulator}, ensure_ascii=False))
-        return 0
     try:
         if args.command == "prepare":
             from evolution.runner import run_lock

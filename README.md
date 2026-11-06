@@ -2,7 +2,7 @@
 
 A framework organized around **generation → testing → evaluation and selection → next-generation generation**. Each generation slot produces one candidate. Invalid output, syntax errors, interface errors, and execution failures are preserved for testing and evaluation; they do not trigger repair within the same generation. Feedback becomes available to generation operators in the following generation.
 
-The included problem is `port_route_planning`. Its real simulator, execution sandbox, observation/action contracts, and domain correctness checks remain **TODO**. With the current configuration, a full `run` records `RUN_ABORTED` during simulator preflight. Configuration validation, preparation, standalone generation, and scenario construction are available separately.
+The included problem is `port_route_planning`. Its real simulator, execution sandbox, observation/action contracts, and domain correctness checks remain **TODO**. With the current configuration, a full `run` records `RUN_ABORTED` during simulator preflight. Preparation, standalone generation, and scenario construction are available separately.
 
 ## Repository layout
 
@@ -34,13 +34,12 @@ Use Python 3.9 or later on Linux. The runner uses Unix file locking and director
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m evolution validate --problem port_route_planning
 python -m evolution prepare --problem port_route_planning --run-id experiment_001
 ```
 
 `requirements.txt` pins the four core libraries: `openai`, `pydantic`, `PyYAML`, and `python-dotenv`. Install vLLM separately in the environment serving the local model.
 
-`validate` checks configuration and referenced components and reports the derived comparison budget. It does not verify credentials, endpoint availability, or simulator readiness. CLI initialization can create the run directory. `prepare` saves configuration and source snapshots without calling a model or running the simulator.
+All commands check configuration fields, parameter constraints, and component loading during initialization. `prepare` saves configuration and source snapshots without calling a model or running the simulator. It does not verify credentials, endpoint availability, or simulator readiness.
 
 ## Models and credentials
 

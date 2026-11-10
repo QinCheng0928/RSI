@@ -39,8 +39,12 @@ class Executor:
     @staticmethod
     def evidence(result: SimulatorResult, scenario: Scenario, run_id: str) -> list[Evidence]:
         # Both decisions and trajectories are retained; evidence binds content to run.
-        items = ([{"kind": "decision", "data": d, "context": result.context} for d in result.decisions]
-                 + [{"kind": "trajectory", "data": t, "context": result.context} for t in result.trajectories])
+        items = ([{"kind": "decision", "data": d} for d in result.decisions]
+                 + [{"kind": "trajectory", "data": t} for t in result.trajectories])
+        # One run-scoped context is sufficient. Repeating a multi-flight context
+        # in every control sample makes long external simulations quadratic.
+        if items:
+            items[0]["context"] = result.context
         return [Evidence(evidence_id=digest({"run_id": run_id, "step": n, "observation": item}),
             scenario_hash=scenario.content_hash, step=n, observation=item) for n, item in enumerate(items)]
 

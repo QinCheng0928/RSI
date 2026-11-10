@@ -1,0 +1,160 @@
+problem_id: uav_adversarial
+spec: problems.uav_adversarial.spec:SPEC
+template: template/algorithm.py.txt
+storage_root: runtime_data
+
+experiment:
+  population_size: 10
+  generations: 8
+  seed: 42
+
+genetics:
+  crossover_probability: 0.5
+  mutation_probability: 0.5
+  elite_count: 2
+
+evaluation:
+  anomaly_analyst_count: 3
+
+execution:
+  simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
+  simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
+  harness_hash: 96c0d86e759d4b9e93f9e0f691882b2bdaad371492e7ec8ec690c4c2ad15b001
+  observation_schema_version: uav-ned-v1
+  external_inputs_hash: live-ue5-projectairsim
+  deterministic: false
+  cache_enabled: false
+  infra_retries: 1
+  timeout_seconds: 900
+  memory_mb: 256
+  environment:
+    address: 127.0.0.1
+    port_topics: 8989
+    port_services: 8990
+    decision_timeout_seconds: 1.0
+
+task:
+  task_id: uav_adversarial
+  goal: >-
+    Develop one shared adversarial UAV decision algorithm. A tested UAV uses a
+    fixed PD+CBF controller to reach a goal. Control N adversaries, N=1..4, with
+    the same count-independent and identity-independent policy. A scalar intensity
+    in [0,1] must meaningfully and progressively control interference: zero should
+    permit passage, higher values should obstruct more through delay, diversion,
+    or forcing the tested UAV outside the flight area, without collisions.
+    All adversaries must stay inside the original airspace. The tested UAV leaving
+    the airspace is an observed termination outcome, not an adversary constraint
+    violation. Learn and judge quality from the task and actual interactions.
+    Use no externally supplied numerical fitness or reference performance metric.
+  inputs:
+    interface: "solve(observation: dict, seed: int) -> dict, called at each 0.1 s control step"
+    coordinates: "World NED, metres, m/s, m/s²; negative z is above the origin"
+    observation:
+      step: "integer, starting at zero"
+      time: "measured elapsed simulation seconds"
+      dt: 0.1
+      intensity: "scalar in [0,1]"
+      num_adversaries: "N in 1..4"
+      remaining_steps: "remaining flight horizon"
+      tested: "{position: [x,y,z], velocity: [vx,vy,vz], acceleration: [ax,ay,az]}"
+      adversaries: "N state dictionaries, in output order; no UAV-specific policy required"
+      goal: "target NED vector"
+      airspace: {min: [-5, -15, -7], max: [20, -5, -1]}
+      limits: {max_speed: 10.0, max_acceleration: 2.0, min_separation: 1.0, goal_tolerance: 3.0}
+      previous_accelerations: "N actually applied adversarial acceleration vectors"
+      history: "up to five preceding {step, tested, adversaries} snapshots"
+    runtime: "Python standard library only, 1 s per decision; one fresh process per intensity flight"
+  outputs:
+    accelerations: "Exactly N finite [ax,ay,az] vectors; each Euclidean norm <= 2 m/s²"
+    application: "Fixed boundary/velocity CBF filter, followed by velocity integration and speed limiting"
+  hard_constraints:
+    - "Only modify algorithm.py; observations are acquired outside the algorithm and passed as arguments."
+    - "One shared decision rule must accept arbitrary N=1..4; do not specialize by count or UAV identity."
+    - "Every initial UAV position must be within the airspace and every pair must be strictly more than 1 m apart."
+    - "Avoid all collisions and center separations <=1 m during interaction; adversaries must remain inside the airspace."
+    - "Return the exact action schema with finite, bounded acceleration vectors."
+    - "No simulator calls, network, files, subprocesses, external models, or access to evaluator internals."
+  allowed_changes: [algorithm.py]
+
+scenario_space:
+  version: uav-flight-v1
+  types: [coverage, boundary, exploration, regression]
+  parameter_ranges:
+    num_adversaries: {type: integer, min: 1, max: 4}
+    initial_positions: "N+1 finite NED vectors, tested first, then adversaries; airspace inclusive"
+    goal: "finite NED vector inside airspace; default [15,-10,-4]"
+    intensities: "2–5 strictly increasing scalars in [0,1], including 0 and 1; default [0,0.5,1]"
+    max_steps: {type: integer, min: 100, max: 500, default: 500}
+  validity_rules:
+    - "Use only the five scenario input keys defined above; do not add evaluation scores or metrics."
+    - "initial_positions length equals num_adversaries+1; ALL UAV pairs must be strictly >1 m apart."
+    - "All positions and goal are inside [-5,-15,-7]..[20,-5,-1]; tested start is >3 m from goal."
+    - "A scenario includes a paired intensity sweep with identical seed, positions, goal and horizon."
+    - "Retain core coverage of all N=1..4; explore geometry, altitude and boundary conditions."
+    - "Propose at most two new scenarios each generation; actual flights are expensive."
+
+rubric:
+  rubric_version: uav-behavior-v1
+  principles:
+    - "Ground every quality judgment in the task description and real decisions/flight trajectories."
+    - "Check collision avoidance, adversary airspace compliance, and a shared policy across counts first."
+    - "Within each matched scenario, examine whether increasing intensity produces progressively stronger observed obstruction."
+    - "At zero intensity examine whether adversaries permit passage; at higher intensity consider delay, diversion and tested-UAV boundary departure in context."
+    - "Consider coordinated interaction, stability, robustness to geometry and fleet size, and observed tradeoffs."
+    - "No fixed fitness formula, numerical quality score, anomaly-count proxy, or imported reference objective."
+    - "Traces are sampled every 25 control steps and at termination; safety is monitored every control step and collision events are subscribed continuously. Do not invent unobserved motion."
+  tradeoff_guidance: >-
+    Compare candidates on identical scenario and intensity coverage. Explain
+    conflicting evidence, physical limits and uncertainty. A stronger command
+    alone does not establish stronger obstruction. Allow ties or incomparability;
+    do not assert a unique best algorithm without supporting comparisons.
+
+models:
+  local:
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen3.5-9B
+    structured_output: json_object
+    parameters: {}
+  cloud:
+    base_url: https://agi.tongji.edu.cn/v1
+    model: DeepSeek-V4.1-Flash
+    structured_output: json_object
+    parameters: {}
+
+agents:
+  generator: local
+  tester: local
+  analysts: [local]
+  independence: local
+  arbiter: local
+  preference: local
+
+core_scenarios:
+  - scenario_id: fleet_1
+    seed: 42
+    purpose: "One adversary, matched intensity sweep"
+    inputs:
+      num_adversaries: 1
+      initial_positions: [[-1.6, -10, -4], [2, -12, -4]]
+      intensities: [0, 0.5, 1]
+  - scenario_id: fleet_2
+    seed: 42
+    purpose: "Original two-adversary geometry, matched intensity sweep"
+    inputs:
+      num_adversaries: 2
+      initial_positions: [[-1.6, -10, -4], [2, -12, -4], [5, -8, -2.5]]
+      intensities: [0, 0.5, 1]
+  - scenario_id: fleet_3
+    seed: 42
+    purpose: "Shared policy scaling to three adversaries"
+    inputs:
+      num_adversaries: 3
+      initial_positions: [[-1.6, -10, -4], [2, -12, -4], [5, -8, -2.5], [8, -12, -4]]
+      intensities: [0, 0.5, 1]
+  - scenario_id: fleet_4
+    seed: 42
+    purpose: "Shared policy scaling to four adversaries"
+    inputs:
+      num_adversaries: 4
+      initial_positions: [[-1.6, -10, -4], [2, -12, -4], [5, -8, -2.5], [8, -12, -4], [11, -8, -4]]
+      intensities: [0, 0.5, 1]

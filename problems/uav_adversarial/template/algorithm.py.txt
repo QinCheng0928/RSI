@@ -1,0 +1,72 @@
+"""Implement solve(observation, seed) with the same rule for every adversary.
+
+Only Python's standard library is available. No simulator access, files, network,
+subprocesses or external models. All measured information is supplied here.
+One fresh worker per intensity flight; globals may hold episode-local state.
+
+observation (NED world coordinates, SI units):
+  step, time, dt, intensity (0..1), remaining_steps, num_adversaries
+  tested: {position: [3], velocity: [3], acceleration: [3]}
+  adversaries: list of N dictionaries with the same state fields
+  goal: [3]
+  airspace: {min: [3], max: [3]}
+  limits: {max_speed, max_acceleration, min_separation, goal_tolerance}
+  previous_accelerations: N actually applied acceleration vectors
+  history: up to five previous {step, tested, adversaries} observations
+
+Return exactly {"accelerations": [[ax, ay, az], ...]} in adversary-list order.
+There must be N finite vectors, each with Euclidean norm <= max_acceleration.
+The simulator applies its fixed boundary/velocity CBF safety filter, integrates
+the accelerations into velocity commands, then advances ProjectAirSim.
+The tested UAV uses a fixed PD+CBF navigator. Avoid every collision, keep the
+adversaries in bounds, and use intensity to control obstruction rather than
+merely changing command magnitude. No count-specific or UAV-specific policies.
+Intensity zero should allow passage; increasing intensity should produce
+stronger, observable obstruction with a shared policy across N=1..4.
+"""
+import math
+
+
+def solve(observation, seed):
+    # A shared geometric baseline, open to replacement during evolution.
+    def subtract(a, b):
+        return [x - y for x, y in zip(a, b)]
+
+    def norm(v):
+        return math.sqrt(sum(x * x for x in v))
+
+    def unit(v):
+        length = norm(v)
+        return [x / max(length, 1e-9) for x in v]
+
+    tested = observation["tested"]
+    direction = unit(subtract(observation["goal"], tested["position"]))
+    intensity = observation["intensity"]
+    maximum = observation["limits"]["max_acceleration"]
+    accelerations = []
+    for drone in observation["adversaries"]:
+        relative = subtract(drone["position"], tested["position"])
+        forward = sum(x * y for x, y in zip(relative, direction))
+        lateral = [x - forward * y for x, y in zip(relative, direction)]
+        if norm(lateral) < 1e-6:
+            lateral = [-direction[1], direction[0], 0.2]
+        away = unit(lateral)
+        target = [x + 2.8 * d + 0.5 * a
+                  for x, d, a in zip(tested["position"], direction, away)]
+        target = [max(lo + 0.5, min(hi - 0.5, x)) for x, lo, hi in zip(
+            target, observation["airspace"]["min"], observation["airspace"]["max"])]
+        desired_velocity = [(1 - intensity) * 2 * a + intensity * (tv + 1.2 * (g - p))
+                            for a, tv, g, p in zip(away, tested["velocity"], target, drone["position"])]
+        action = [0.8 * (target_v - v) for target_v, v in zip(desired_velocity, drone["velocity"])]
+        for other in [tested, *observation["adversaries"]]:
+            if other is drone:
+                continue
+            separation = subtract(drone["position"], other["position"])
+            distance = norm(separation)
+            repulsion = max(0.0, 2.5 - distance) * 3.0
+            action = [x + repulsion * d for x, d in zip(action, unit(separation))]
+        length = norm(action)
+        if length > maximum:
+            action = [x * maximum / length for x in action]
+        accelerations.append(action)
+    return {"accelerations": accelerations}

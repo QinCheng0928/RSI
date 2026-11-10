@@ -12,7 +12,7 @@ from evolution.framework import ProblemSpec, Simulator
 from evolution.generation import Developer
 from evolution.llm import LLM, OpenAIClient
 from evolution.models import Assessment, Individual, Population, Scenario, ScenarioSuite, Status
-from evolution.storage import Store
+from evolution.storage import Store, atomic_text
 from evolution.testing import Executor, Tester
 
 
@@ -85,8 +85,52 @@ class Evolution:
             "invalid_count": sum(a.status != Status.EXECUTABLE for a in assessments),
             "deployable_ids": deployable, "deployment_message": "See deployable_ids for executable candidates that passed evaluation" if deployable else "No deployable algorithms",
             "status": status, "reason": reason, "config_hash": self.fingerprint}
+        if status == "COMPLETED" and population is not None:
+            result["recommendation_ref"] = self.export_recommendation(population)
         self.store.pointer("experiment_manifest.json", result)
         return result
+
+    def export_recommendation(self, population: Population) -> str:
+        """Export an evaluated decision without inventing a total quality order."""
+        report = self.store.read(population.selection_report_ref)
+        eligible = set(report["executable_pool_ids"])
+        defeats = {key: set() for key in eligible}
+        wins = {key: set() for key in eligible}
+        for pair in report["comparison_graph"]:
+            a, b = pair["individual_a"], pair["individual_b"]
+            if a not in eligible or b not in eligible or not pair["order_consistent"]:
+                continue
+            if pair["winner"] == "B_BETTER":
+                a, b = b, a
+            elif pair["winner"] != "A_BETTER":
+                continue
+            defeats[b].add(a)
+            wins[a].add(b)
+        frontier = sorted(key for key in eligible if not defeats[key])
+        # A cycle prevents an undefeated frontier. Keep uncertainty explicit,
+        # and export a selected executable representative for practical use.
+        choices = frontier or sorted(eligible)
+        preferred = next((key for key in population.population_ids if key in choices),
+                         choices[0] if choices else None)
+        unique = preferred is not None and len(eligible) > 1 and wins[preferred] == eligible - {preferred}
+        recommendation = {"generation": population.generation,
+            "status": ("NO_VALID_CANDIDATE" if preferred is None else
+                       "ONLY_VALID_CANDIDATE" if len(eligible) == 1 else
+                       "UNIQUE_PREFERENCE_WINNER" if unique else
+                       "UNRESOLVED_FRONTIER" if frontier else "CYCLIC_PREFERENCES"),
+            "recommended_id": preferred, "undefeated_ids": frontier,
+            "unique_best_supported": unique, "selection_report_ref": population.selection_report_ref,
+            "scope": "Final common scenario suite and evidence-backed pairwise judgments; no numerical fitness or global optimality claim."}
+        if preferred is not None:
+            individual = Individual.model_validate(self.store.read(f"individuals/{preferred}/metadata.json"))
+            source = self.store.source(individual)
+            target = self.store.path("final/algorithm.py")
+            if target.exists() and target.read_text() != source["algorithm.py"]:
+                raise ContractError("final recommendation source changed")
+            atomic_text(target, source["algorithm.py"])
+            recommendation.update(algorithm_ref="final/algorithm.py", code_hash=individual.code_hash,
+                                  source_ref=individual.artifact_ref)
+        return self.store.save("final/best.json", recommendation)
 
     def previous_state(self, population: Optional[Population]) -> dict:
         if population is None:

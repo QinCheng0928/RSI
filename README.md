@@ -2,7 +2,7 @@
 
 A framework organized around **generation → testing → evaluation and selection → next-generation generation**. Each generation slot produces one candidate. Invalid output, syntax errors, interface errors, and execution failures are preserved for testing and evaluation; they do not trigger repair within the same generation. Feedback becomes available to generation operators in the following generation.
 
-The included problem is `port_route_planning`. Its real simulator, execution sandbox, observation/action contracts, and domain correctness checks remain **TODO**. With the current configuration, a full `run` records `RUN_ABORTED` during simulator preflight. Preparation, standalone generation, and scenario construction are available separately.
+The example problem `port_route_planning` remains a scaffold: its full `run` records `RUN_ABORTED` during simulator preflight. `uav_adversarial` connects to an already running UE5/ProjectAirSim instance and optimizes a shared adversarial UAV decision policy.
 
 ## Repository layout
 
@@ -20,7 +20,12 @@ problems/port_route_planning/
   spec.py                   # Scenario validation, correctness, and feedback sanitization
   simulator.py              # Problem-owned Python simulation integration (TODO)
   template/algorithm.py.txt  # Problem-specific algorithm template
-  experiments/              # cloud and no_cache configuration overlays
+problems/uav_adversarial/
+  problem.yaml              # Task, paired intensity sweeps, 1–4 adversary coverage
+  spec.py                   # Initialization and physical correctness checks
+  simulator.py              # ProjectAirSim lifecycle, PD+CBF, isolated decisions
+  template/algorithm.py.txt  # Shared policy interface and geometric baseline
+  sim_config/               # Scene prototype and original quadrotor model
 requirements.txt            # Pinned core runtime dependencies
 ```
 
@@ -37,7 +42,7 @@ python -m pip install -r requirements.txt
 python -m evolution prepare --problem port_route_planning --run-id experiment_001
 ```
 
-`requirements.txt` pins the four core libraries: `openai`, `pydantic`, `PyYAML`, and `python-dotenv`. Install vLLM separately in the environment serving the local model.
+`requirements.txt` includes the four pinned core libraries and NumPy/SciPy for the UAV controller. Install vLLM separately in the environment serving the local model.
 
 All commands check configuration fields, parameter constraints, and component loading during initialization. `prepare` saves configuration and source snapshots without calling a model or running the simulator. It does not verify credentials, endpoint availability, or simulator readiness.
 
@@ -88,7 +93,7 @@ vllm serve /path/to/model \
 
 The served name must match `models.local.model`, and the server key must match the key referenced by the local profile. `VLLM_API_KEY` is simply the credential variable used in this example.
 
-`agents` selects a profile explicitly for each role. All roles currently use `local`; configuring both profiles does not create automatic priority or fallback. `--experiment cloud` applies the supplied overlay to select `cloud` for all roles. `agents.analysts` accepts one shared profile or exactly `anomaly_analyst_count` profiles.
+`agents` selects a profile explicitly for each role. All roles currently use `local`; configuring both profiles does not create automatic priority or fallback. `agents.analysts` accepts one shared profile or exactly `anomaly_analyst_count` profiles. Optional experiment overlays can be added under a problem's `experiments/` directory; none are supplied.
 
 `structured_output` is used in `evolution/llm.py` to build the request's `response_format`:
 
@@ -179,6 +184,46 @@ Selection prefers correct, comparable executable candidates using the preference
 
 If fewer than P candidates qualify for behavioral selection, the implementation fills remaining slots from failed candidates using code, strategy, and lineage diversity, with a seeded tie-breaker. All algorithm failures use `INVALID`; failure categories are preserved for diagnosis without establishing a selection priority. Only retained failures receive repair offspring next round. An entirely failed population can continue evolving, but is not reported as deployable.
 
+## UAV adversarial problem
+
+Use Python 3.10+ (the local `.venv` uses Python 3.12). Start UE5/ProjectAirSim manually before running. Linux needs `bwrap` (the `bubblewrap` package), `prlimit` (`util-linux`), and `/usr/bin/python3` for candidate isolation. The controller needs NumPy/SciPy from `requirements.txt`.
+
+Install the original ProjectAirSim 0.1.1 SDK into the same environment. Its full dependency list includes old optional visualization packages; the flight adapter only needs the core client imports below:
+
+```bash
+source .venv/bin/activate
+python -m pip install --no-deps -e /home/qincheng/ProjectAirSim/client/python/projectairsim
+python -m pip install pynng msgpack cryptography commentjson jsonschema pykml \
+  'setuptools<81' opencv-python-headless pqdict
+```
+
+The provided local `.venv` already contains these dependencies. LLM profiles, role assignments and credential handling match `port_route_planning/problem.yaml`.
+
+```bash
+source .venv/bin/activate
+python -m evolution run --problem uav_adversarial --run-id uav_001
+```
+
+Set `experiment.generations` in `problems/uav_adversarial/problem.yaml` before starting a new run to choose the number of evolution rounds. Defaults are 10 candidates, generation 0 plus 8 evolution rounds, and three independent anomaly analysts. The core suite covers 1–4 adversaries; each scenario runs matched intensity values 0, 0.5 and 1. Adaptive scenarios retain the same paired-flight structure.
+
+`simulator.py` owns scene reloads, dynamic creation of exactly N+1 UAVs, API control, arming, takeoff, zero-velocity airborne initialization, observations, PD+CBF tested navigation, velocity commands, landing, disarming and disconnect. Initialization checks both requested and measured positions against the original NED airspace and requires **every UAV pair to be strictly more than 1 m apart**. Each intensity flight reloads the scene and resets candidate globals. A server lock prevents concurrent experiments from controlling the same UE instance.
+
+Only generated `algorithm.py` changes. All observations, including all UAV kinematics, goal, limits, history and the intensity, are acquired outside `solve(observation, seed)`. The output is N acceleration vectors. One shared geometric baseline is provided; generated policies must generalize across counts and identities. Candidate processes have no host network or project-directory access, a read-only filesystem, CPU/memory limits and a per-decision wall-clock limit. Only the Python standard library is available there.
+
+Flight quality is inferred by the framework's language-model evaluation from the task and measured interactions. The original project's training/evaluation code and objective configuration are never imported or passed to the optimizer. Deterministic checks only cover execution and physical constraints. Collision or an adversary leaving the airspace fails correctness; the tested UAV leaving the airspace is an observed outcome, as requested by the task. Higher intensity is judged across matched flights; stronger commands alone do not establish stronger obstruction. The template is a starting policy, and monotonic obstruction is an optimization objective rather than an assumed property.
+
+Safety is monitored at every 0.1 s control step with continuous collision-topic subscriptions. Evaluation retains trajectory samples every 25 steps and at initialization/termination, together with sampled requested/applied actions and all detected constraint violations. This sampled evidence cannot prove continuous separation between control steps. No synthetic dynamics replace an unavailable UE server. External flights are nondeterministic: caching is disabled and both parents and offspring are flown again on the common suite.
+
+After completion, `runtime_data/uav_adversarial/uav_001/final/algorithm.py` contains the recommended decision policy, and `final/best.json` records its source, comparisons and whether a unique winner is supported. Ties, incomparable judgments and preference cycles remain explicit. If every candidate fails correctness, no deployable policy is exported. This recommendation concerns the tested suite; it is not a global-optimality guarantee.
+
+The adapter verifies its source/config/template fingerprint during preflight. After intentionally changing problem implementation files, obtain the new value below and update `execution.harness_hash`, then use a new run ID:
+
+```bash
+python -c 'from problems.uav_adversarial.simulator import harness_hash; print(harness_hash())'
+```
+
+The copied quadrotor model and adapted flight/navigation conventions originate from ACIAT-UAV; its source is available locally at `/home/qincheng/ACIAT-UAV` under Apache-2.0. That repository is not needed at runtime.
+
 ## Commands and recovery
 
 ```bash
@@ -190,8 +235,6 @@ python -m evolution build-suite --problem port_route_planning --run-id scenarios
 
 # After implementing the simulator, sandbox, and domain contracts:
 python -m evolution run --problem port_route_planning --run-id experiment_001
-python -m evolution run --problem port_route_planning --experiment cloud --run-id cloud_001
-python -m evolution run --problem port_route_planning --experiment no_cache --run-id no_cache_001
 ```
 
 Standalone generation reports `GENERATED_UNTESTED`; standalone scenario construction reports `SUITE_BUILT_UNEXECUTED`. Both require working model credentials. A full experiment reports `COMPLETED` only after generation 0 and all configured evolution rounds finish.
@@ -221,6 +264,8 @@ execution_cache/                # Exact execution-key index
 memory/                         # Reviewed events
 events/                         # Abort and cache-corruption events
 standalone/                     # Standalone generation and scenario artifacts
+final/algorithm.py              # Recommended executable candidate, when available
+final/best.json                 # Recommendation and pairwise-order uncertainty
 experiment_manifest.json        # Progress, statuses, deployable IDs, abort reason
 ```
 
@@ -277,4 +322,4 @@ The `execution` settings describe the intended execution contract:
 - `timeout_seconds` and `memory_mb` specify limits that the real sandbox must enforce.
 - `environment` supplies problem-specific simulation settings, such as a time step or road-model parameters; it is snapshotted and included in the execution cache key, and must not contain secrets. Per-scenario inputs remain in `Scenario.inputs`.
 
-**Remaining TODOs:** connect the real simulator and sandbox, define observation/action schemas and valid scenario ranges, implement domain correctness checks, and replace placeholder execution fingerprints. The repository currently provides the framework and adapter contracts, not a completed simulation environment.
+**Remaining TODOs for `port_route_planning`:** connect its simulator and sandbox, define observation/action schemas and valid scenario ranges, implement domain correctness checks, and replace placeholder fingerprints. `uav_adversarial` implements these contracts; its external UE5 server must be started separately and real flight integration must be verified in that environment.

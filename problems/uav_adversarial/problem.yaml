@@ -19,7 +19,7 @@ evaluation:
 execution:
   simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
   simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
-  harness_hash: 96c0d86e759d4b9e93f9e0f691882b2bdaad371492e7ec8ec690c4c2ad15b001
+  harness_hash: a73250700e5c2629aac73c8f023c06c0d845ca5243467490edf19512c8e0cc02
   observation_schema_version: uav-ned-v1
   external_inputs_hash: live-ue5-projectairsim
   deterministic: false
@@ -63,7 +63,7 @@ task:
       limits: {max_speed: 10.0, max_acceleration: 2.0, min_separation: 1.0, goal_tolerance: 3.0}
       previous_accelerations: "N actually applied adversarial acceleration vectors"
       history: "up to five preceding {step, tested, adversaries} snapshots"
-    runtime: "Python standard library only, 1 s per decision; one fresh process per intensity flight"
+    runtime: "Python 3.8-compatible code and standard library only, 1 s per decision; one fresh process per intensity flight"
   outputs:
     accelerations: "Exactly N finite [ax,ay,az] vectors; each Euclidean norm <= 2 m/s²"
     application: "Fixed boundary/velocity CBF filter, followed by velocity integration and speed limiting"
@@ -122,12 +122,12 @@ models:
     parameters: {}
 
 agents:
-  generator: local
-  tester: local
-  analysts: [local]
-  independence: local
-  arbiter: local
-  preference: local
+  generator: cloud
+  tester: cloud
+  analysts: [cloud]
+  independence: cloud
+  arbiter: cloud
+  preference: cloud
 
 core_scenarios:
   - scenario_id: fleet_1

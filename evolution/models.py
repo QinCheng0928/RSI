@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Dict, List
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -35,12 +35,12 @@ class SourceFile(Model):
 
 class CodeProposal(Model):
     strategy_tag: str
-    files: list[SourceFile] = Field(min_length=1)
+    files: List[SourceFile] = Field(min_length=1)
     rationale: str
 
 
 class StrategyPlan(Model):
-    strategies: list[str] = Field(min_length=2)
+    strategies: List[str] = Field(min_length=2)
 
 
 class Individual(Model):
@@ -48,16 +48,16 @@ class Individual(Model):
     code_hash: str
     artifact_ref: str
     generation_born: int
-    parent_ids: list[str]
+    parent_ids: List[str]
     operator: Literal["INITIAL", "REPAIR", "CROSSOVER", "MUTATION"]
     strategy_tag: str
     lineage_ref: str
-    generation_errors: list[str] = Field(default_factory=list)
+    generation_errors: List[str] = Field(default_factory=list)
 
 
 class Scenario(Model):
     scenario_id: str
-    inputs: dict[str, Any]
+    inputs: Dict[str, Any]
     seed: int
     purpose: str
 
@@ -68,12 +68,12 @@ class Scenario(Model):
 
 
 class ScenarioProposal(Model):
-    scenarios: list[Scenario] = Field(min_length=1)
+    scenarios: List[Scenario] = Field(min_length=1)
 
 
 class ScenarioSuite(Model):
     generation: int
-    scenarios: list[Scenario] = Field(min_length=1)
+    scenarios: List[Scenario] = Field(min_length=1)
     scenario_space_version: str
     rubric_version: str
 
@@ -97,14 +97,14 @@ class Evidence(Model):
     evidence_id: str
     scenario_hash: str
     step: int
-    observation: dict[str, Any]
+    observation: Dict[str, Any]
 
 
 class SimulatorResult(Model):
     status: Status
-    decisions: list[dict[str, Any]] = Field(default_factory=list)
-    trajectories: list[dict[str, Any]] = Field(default_factory=list)
-    context: dict[str, Any] = Field(default_factory=dict)
+    decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    trajectories: List[Dict[str, Any]] = Field(default_factory=list)
+    context: Dict[str, Any] = Field(default_factory=dict)
     stdout: str = ""
     stderr: str = ""
     failure_category: Optional[str] = None
@@ -116,7 +116,7 @@ class ExecutionRecord(Model):
     run_id: str
     scenario_id: str
     result: SimulatorResult
-    evidence: list[Evidence]
+    evidence: List[Evidence]
     stdout_ref: str
     stderr_ref: str
     provenance: Literal["SIMULATOR", "GENERATION_ERROR"] = "SIMULATOR"
@@ -131,19 +131,19 @@ class RunUse(Model):
 
 class Coverage(Model):
     individual_id: str
-    required_execution_keys: list[str]
-    cached_keys: list[str]
-    executed_keys: list[str]
-    generation_error_keys: list[str]
-    missing_keys: list[str]
-    environment_failures: list[str]
+    required_execution_keys: List[str]
+    cached_keys: List[str]
+    executed_keys: List[str]
+    generation_error_keys: List[str]
+    missing_keys: List[str]
+    environment_failures: List[str]
 
 
 class Diagnosis(Model):
     individual_id: str
     status: Status
     category: str
-    failure_refs: list[str]
+    failure_refs: List[str]
     next_generation_feedback: str
 
 
@@ -156,45 +156,45 @@ class AnomalyClaim(Model):
     claim_id: str
     scenario_id: str
     claim: str
-    alternative_explanations: list[str]
-    evidence_refs: list[str]
+    alternative_explanations: List[str]
+    evidence_refs: List[str]
     hypothesis_only: bool
 
 
 class AnalystOutput(Model):
-    claims: list[AnomalyClaim]
+    claims: List[AnomalyClaim]
 
 
 class ReviewOutput(Model):
-    observations: list[str]
-    counter_evidence_refs: list[str]
+    observations: List[str]
+    counter_evidence_refs: List[str]
 
 
 class SemanticRelations(Model):
-    shared_premises: list[str]
-    correlated_claims: list[str]
-    contradictions: list[str]
-    independent_claims: list[str]
+    shared_premises: List[str]
+    correlated_claims: List[str]
+    contradictions: List[str]
+    independent_claims: List[str]
 
 
 class Verdict(Model):
     claim_id: str
     status: Literal["CONFIRMED", "REJECTED", "UNCONFIRMED"]
-    evidence_refs: list[str]
+    evidence_refs: List[str]
     explanation: str
     opposing_explanation: str
 
 
 class ArbiterOutput(Model):
-    verdicts: list[Verdict]
-    strengths: list[str]
-    tradeoffs: list[str]
+    verdicts: List[Verdict]
+    strengths: List[str]
+    tradeoffs: List[str]
 
 
 class PreferenceOutput(Model):
     winner: Literal["A_BETTER", "B_BETTER", "TIE", "INCOMPARABLE"]
     explanation: str
-    evidence_refs: list[str]
+    evidence_refs: List[str]
     serious_regression: bool
 
 
@@ -204,7 +204,7 @@ class PairJudgment(Model):
     winner: Literal["A_BETTER", "B_BETTER", "TIE", "INCOMPARABLE"]
     order_consistent: bool
     serious_regression: bool
-    reasoning_refs: list[str]
+    reasoning_refs: List[str]
 
 
 class Assessment(Model):
@@ -222,23 +222,23 @@ class Assessment(Model):
 
 class SelectionReport(Model):
     generation: int
-    pool_ids: list[str]
-    executable_pool_ids: list[str]
-    invalid_pool_ids: list[str]
-    elite_ids: list[str]
-    selected_invalid_ids: list[str]
-    selected_ids: list[str]
-    duplicate_code_groups: list[list[str]]
-    comparison_graph: list[PairJudgment]
+    pool_ids: List[str]
+    executable_pool_ids: List[str]
+    invalid_pool_ids: List[str]
+    elite_ids: List[str]
+    selected_invalid_ids: List[str]
+    selected_ids: List[str]
+    duplicate_code_groups: List[List[str]]
+    comparison_graph: List[PairJudgment]
     behavior_quality_available: bool
     rule_version: str = "evaluation-selection-v3"
 
 
 class Population(Model):
     generation: int
-    population_ids: list[str]
-    assessments: list[Assessment]
-    elite_ids: list[str]
+    population_ids: List[str]
+    assessments: List[Assessment]
+    elite_ids: List[str]
     selection_report_ref: str
     config_hash: str
 

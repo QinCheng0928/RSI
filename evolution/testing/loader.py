@@ -5,12 +5,12 @@ import hashlib
 import importlib.util
 import inspect
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Dict
 
 from evolution.errors import ContractError
 
 
-def load_algorithm(path: Path) -> Callable[[dict[str, Any], int], dict[str, Any]]:
+def load_algorithm(path: Path) -> Callable[[Dict[str, Any], int], Dict[str, Any]]:
     """Import an immutable Python source file and return solve(observation, seed).
 
     Simulator adapters call this inside their sandbox/worker, then call solve

@@ -1,7 +1,7 @@
 """Shared contracts for problem specifications and problem-owned simulators."""
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Dict, List
 
 from evolution.config import ExecutionConfig
 from evolution.models import Correctness, Scenario, SimulatorResult
@@ -52,5 +52,5 @@ class ProblemSpec(ABC):
         """Deterministic domain checks, independent of LLM preferences."""
 
     @abstractmethod
-    def sanitize_feedback(self, confirmed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def sanitize_feedback(self, confirmed: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Only task/scenario/observed symptom; no candidate identity or lineage."""

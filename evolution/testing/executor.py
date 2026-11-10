@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Dict, List
 
 import uuid
 
@@ -37,7 +38,7 @@ class Executor:
             external_inputs_hash=self.cfg.external_inputs_hash)
 
     @staticmethod
-    def evidence(result: SimulatorResult, scenario: Scenario, run_id: str) -> list[Evidence]:
+    def evidence(result: SimulatorResult, scenario: Scenario, run_id: str) -> List[Evidence]:
         # Both decisions and trajectories are retained; evidence binds content to run.
         items = ([{"kind": "decision", "data": d} for d in result.decisions]
                  + [{"kind": "trajectory", "data": t} for t in result.trajectories])
@@ -68,7 +69,7 @@ class Executor:
             return None
         return RunUse(individual_id=individual.individual_id, record=record, cache_hit=True, record_ref=cached["record_ref"])
 
-    def run(self, pool: list[Individual], suite: ScenarioSuite, prefix: str) -> dict[str, list[RunUse]]:
+    def run(self, pool: List[Individual], suite: ScenarioSuite, prefix: str) -> Dict[str, List[RunUse]]:
         output, coverage, real_calls = {}, [], 0
         use_cache = self.cfg.cache_enabled and self.cfg.deterministic and self.simulator.deterministic
         for individual in pool:

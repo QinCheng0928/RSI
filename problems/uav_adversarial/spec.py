@@ -1,4 +1,5 @@
 """Task contracts only; behavioral quality is judged from flight observations."""
+from typing import List, Union
 from itertools import combinations
 import math
 
@@ -10,7 +11,7 @@ from evolution.models import Correctness, Model, Scenario, SimulatorResult, Stat
 
 POS_MIN = (-5.0, -15.0, -7.0)
 POS_MAX = (20.0, -5.0, -1.0)
-Vector = list[StrictFloat | StrictInt]
+Vector = List[Union[StrictFloat, StrictInt]]
 
 
 def vector(value):
@@ -32,9 +33,9 @@ def validate_positions(positions):
 
 class FlightScenario(Model):
     num_adversaries: int = Field(strict=True, ge=1, le=4)
-    initial_positions: list[Vector]
+    initial_positions: List[Vector]
     goal: Vector = Field(default_factory=lambda: [15.0, -10.0, -4.0])
-    intensities: list[StrictFloat | StrictInt] = Field(default_factory=lambda: [0.0, 0.5, 1.0])
+    intensities: List[Union[StrictFloat, StrictInt]] = Field(default_factory=lambda: [0.0, 0.5, 1.0])
     max_steps: int = Field(default=500, strict=True, ge=100, le=500)
 
     @model_validator(mode="after")

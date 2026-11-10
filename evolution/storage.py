@@ -5,7 +5,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 from pydantic import ValidationError
 
@@ -16,6 +16,15 @@ from evolution.models import Individual, Population, canonical, digest
 def artifact_id() -> str:
     """UTC chronological ID with a random suffix for concurrent model calls."""
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ_") + uuid.uuid4().hex[:12]
+
+
+def is_within(path: Path, parent: Path) -> bool:
+    """Python 3.8 equivalent of Path.is_relative_to for resolved paths."""
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 def atomic_text(path: Path, content: str) -> None:
@@ -42,7 +51,7 @@ class Store:
 
     def path(self, ref: str) -> Path:
         path = (self.root / ref).resolve()
-        if not path.is_relative_to(self.root):
+        if not is_within(path, self.root):
             raise ContractError("artifact path escapes run root")
         return path
 
@@ -83,11 +92,11 @@ class Store:
     def event(self, kind: str, value: Any) -> str:
         return self.save(f"events/{artifact_id()}.json", {"kind": kind, "data": value})
 
-    def save_individual(self, individual: Individual, files: dict[str, str], lineage: Any) -> None:
+    def save_individual(self, individual: Individual, files: Dict[str, str], lineage: Any) -> None:
         code_root = self.path(individual.artifact_ref)
         for relative, source in files.items():
             path = (code_root / relative).resolve()
-            if not path.is_relative_to(code_root) or path.suffix != ".py":
+            if not is_within(path, code_root) or path.suffix != ".py":
                 raise ContractError("source path must stay in the candidate directory")
             if path.exists() and path.read_text() != source:
                 raise ContractError("cannot overwrite parent source")
@@ -97,7 +106,7 @@ class Store:
         self.save(f"individuals/{individual.individual_id}/metadata.json", individual)
         self.save(individual.lineage_ref, lineage)
 
-    def source(self, individual: Individual) -> dict[str, str]:
+    def source(self, individual: Individual) -> Dict[str, str]:
         files = self.read(f"individuals/{individual.individual_id}/source_manifest.json")
         if digest(files) != individual.code_hash:
             raise ContractError("individual source manifest hash mismatch")

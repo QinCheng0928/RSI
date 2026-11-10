@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 from evolution.config import ProblemConfig
 from evolution.errors import ContractError, InfrastructureError
@@ -17,8 +17,8 @@ class Evaluator:
     def __init__(self, cfg: ProblemConfig, spec: ProblemSpec, llm: LLM, store: Store):
         self.cfg, self.spec, self.llm, self.store = cfg, spec, llm, store
 
-    def evaluate(self, pool: list[Individual], execution: dict[str, list[RunUse]],
-                 suite: ScenarioSuite, prefix: str) -> tuple[list[Assessment], list[PairJudgment], list[dict]]:
+    def evaluate(self, pool: List[Individual], execution: Dict[str, List[RunUse]],
+                 suite: ScenarioSuite, prefix: str) -> Tuple[List[Assessment], List[PairJudgment], List[dict]]:
         assessments, profiles, confirmed = [], {}, []
         conditions = {(s.content_hash, s.seed) for s in suite.scenarios}
         baseline_conditions = None
@@ -79,7 +79,7 @@ class Evaluator:
         self.store.save(prefix + "/evaluation/sanitized_feedback.json", sanitized)
         return assessments, comparisons, sanitized
 
-    def analyze(self, alias: str, uses: list[RunUse], suite: ScenarioSuite, base: str) -> tuple[dict, list[dict]]:
+    def analyze(self, alias: str, uses: List[RunUse], suite: ScenarioSuite, base: str) -> Tuple[dict, List[dict]]:
         m = self.cfg.evaluation.anomaly_analyst_count
         trace = [{"scenario_id": scenario.scenario_id,
                   "decisions": used.record.result.decisions, "trajectories": used.record.result.trajectories,
@@ -195,7 +195,7 @@ class Evaluator:
             "trace": trace, "evidence_refs": sorted(evidence_index)}
         return profile, symptoms
 
-    def compare(self, profiles: dict[str, dict], suite: ScenarioSuite, prefix: str) -> list[PairJudgment]:
+    def compare(self, profiles: Dict[str, dict], suite: ScenarioSuite, prefix: str) -> List[PairJudgment]:
         comparisons = []
         maximum_candidates = 2 * self.cfg.experiment.population_size
         if len(profiles) > maximum_candidates:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import fcntl
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from evolution.config import ProblemConfig, config_fingerprint, load_symbol
 from evolution.errors import ContractError, EvolutionError
@@ -12,7 +12,7 @@ from evolution.framework import ProblemSpec, Simulator
 from evolution.generation import Developer
 from evolution.llm import LLM, OpenAIClient
 from evolution.models import Assessment, Individual, Population, Scenario, ScenarioSuite, Status
-from evolution.storage import Store, atomic_text
+from evolution.storage import Store, atomic_text, is_within
 from evolution.testing import Executor, Tester
 
 
@@ -34,7 +34,7 @@ class Evolution:
                  llm: Optional[LLM] = None, simulator: Optional[Simulator] = None,
                  spec: Optional[ProblemSpec] = None):
         self.cfg, self.directory, self.store = cfg, problem_directory.resolve(), store
-        if store.root.is_relative_to(self.directory):
+        if is_within(store.root, self.directory):
             raise ContractError("run storage must be outside the problem directory")
         self.fingerprint = config_fingerprint(cfg, self.directory)
         self.spec = spec if spec is not None else load_symbol(cfg.spec)
@@ -138,7 +138,7 @@ class Evolution:
         report = self.store.read(population.selection_report_ref)
         return self.store.read(report["runtime_state_ref"])
 
-    def offspring(self, generation: int, parents: list[Assessment], prefix: str, feedback: dict) -> list[Individual]:
+    def offspring(self, generation: int, parents: List[Assessment], prefix: str, feedback: dict) -> List[Individual]:
         # Recover a complete stage after interruption without making new candidates
         # or retrying an algorithm inside the same generation.
         directory = self.store.path(f"generations/gen_{generation:04d}/attempts")

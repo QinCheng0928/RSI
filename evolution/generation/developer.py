@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import List
 
 import difflib
 import random
@@ -8,7 +9,7 @@ from evolution.config import ProblemConfig
 from evolution.errors import ContractError
 from evolution.llm import LLM
 from evolution.models import Assessment, CodeProposal, Individual, StrategyPlan, digest
-from evolution.storage import Store
+from evolution.storage import Store, is_within
 
 
 class Developer:
@@ -17,11 +18,11 @@ class Developer:
     def __init__(self, cfg: ProblemConfig, directory: Path, llm: LLM, store: Store):
         self.cfg, self.llm, self.store = cfg, llm, store
         template = (directory / cfg.template).resolve()
-        if not template.is_relative_to(directory.resolve()):
+        if not is_within(template, directory.resolve()):
             raise ContractError("template must live in the problem directory")
         self.template = template.read_text()
 
-    def generate(self, generation: int, parents: list[Assessment], prefix: str, feedback: dict) -> list[Individual]:
+    def generate(self, generation: int, parents: List[Assessment], prefix: str, feedback: dict) -> List[Individual]:
         cfg, p = self.cfg, self.cfg.experiment.population_size
         rng = random.Random(cfg.experiment.seed + generation * 100003)
         if parents and (len(parents) != p or any(a.individual.generation_born >= generation for a in parents)):
@@ -38,7 +39,7 @@ class Developer:
             strategies = plan.strategies
         produced, operations = [], []
         for slot in range(p):
-            chosen: list[Assessment] = []
+            chosen: List[Assessment] = []
             if parents:
                 if slot < len(repair_parents):
                     # Every selected failure gets exactly one child, using only

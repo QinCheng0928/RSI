@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Dict, List
 
 import yaml
 from pydantic import Field, model_validator
@@ -30,7 +30,7 @@ class ExecutionConfig(Model):
     simulator: str
     cache_enabled: bool = True
     deterministic: bool = True
-    environment: dict[str, Any] = Field(default_factory=dict)
+    environment: Dict[str, Any] = Field(default_factory=dict)
     # Version of the complete Python simulation: environment, dynamics, and dependencies.
     simulator_version: str = "TODO"
     harness_hash: str = "TODO"
@@ -47,7 +47,7 @@ class ModelProfile(Model):
     timeout_seconds: float = Field(default=120, gt=0)
     max_retries: int = Field(default=2, ge=0, le=5)
     structured_output: Literal["json_object", "json_schema"] = "json_object"
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def reserved(self):
@@ -60,7 +60,7 @@ class ModelProfile(Model):
 class AgentConfig(Model):
     generator: str
     tester: str
-    analysts: list[str]
+    analysts: List[str]
     independence: str
     arbiter: str
     preference: str
@@ -69,22 +69,22 @@ class AgentConfig(Model):
 class TaskSpec(Model):
     task_id: str
     goal: str
-    inputs: dict[str, Any]
-    outputs: dict[str, Any]
-    hard_constraints: list[str]
-    allowed_changes: list[str]
+    inputs: Dict[str, Any]
+    outputs: Dict[str, Any]
+    hard_constraints: List[str]
+    allowed_changes: List[str]
 
 
 class ScenarioSpace(Model):
     version: str
-    types: list[str]
-    parameter_ranges: dict[str, Any]
-    validity_rules: list[str]
+    types: List[str]
+    parameter_ranges: Dict[str, Any]
+    validity_rules: List[str]
 
 
 class Rubric(Model):
     rubric_version: str
-    principles: list[str]
+    principles: List[str]
     tradeoff_guidance: str
 
 
@@ -99,9 +99,9 @@ class ProblemConfig(Model):
     task: TaskSpec
     scenario_space: ScenarioSpace
     rubric: Rubric
-    models: dict[str, ModelProfile]
+    models: Dict[str, ModelProfile]
     agents: AgentConfig
-    core_scenarios: list[dict[str, Any]] = Field(default_factory=list)
+    core_scenarios: List[Dict[str, Any]] = Field(default_factory=list)
     storage_root: str = "runtime_data"
 
     @property

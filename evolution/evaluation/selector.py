@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import List, Tuple
 
 from collections import Counter, defaultdict
 
@@ -13,8 +14,8 @@ class Selector:
     def __init__(self, genetics: GeneticsConfig, size: int, seed: int):
         self.cfg, self.size, self.seed = genetics, size, seed
 
-    def select(self, generation: int, assessments: list[Assessment], comparisons: list[PairJudgment],
-               bootstrap: bool = False) -> tuple[list[Assessment], SelectionReport]:
+    def select(self, generation: int, assessments: List[Assessment], comparisons: List[PairJudgment],
+               bootstrap: bool = False) -> Tuple[List[Assessment], SelectionReport]:
         if any(a.status == Status.INFRA_ERROR for a in assessments):
             raise InfrastructureError("infrastructure failure is not algorithm fitness")
         if len({a.individual.individual_id for a in assessments}) != len(assessments):

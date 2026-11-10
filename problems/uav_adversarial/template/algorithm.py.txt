@@ -1,6 +1,6 @@
 """Implement solve(observation, seed) with the same rule for every adversary.
 
-Only Python's standard library is available. No simulator access, files, network,
+Use Python 3.8-compatible code and standard-library imports. No simulator access, files, network,
 subprocesses or external models. All measured information is supplied here.
 One fresh worker per intensity flight; globals may hold episode-local state.
 

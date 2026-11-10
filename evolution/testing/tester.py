@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, List
 
 from evolution.config import Rubric, ScenarioSpace, TaskSpec
 from evolution.errors import ContractError
@@ -19,9 +19,9 @@ class Tester:
         self.task, self.space, self.rubric = task, space, rubric
         self.profile, self.spec, self.llm, self.store = profile, spec, llm, store
 
-    def build(self, generation: int, core: list[Scenario], previous: list[Scenario],
-              regression: list[Scenario], coverage: dict[str, Any],
-              sanitized_feedback: list[dict[str, Any]], prefix: str) -> ScenarioSuite:
+    def build(self, generation: int, core: List[Scenario], previous: List[Scenario],
+              regression: List[Scenario], coverage: Dict[str, Any],
+              sanitized_feedback: List[Dict[str, Any]], prefix: str) -> ScenarioSuite:
         # Caller supplies only scenario-level coverage and domain-sanitized symptoms.
         feedback = [{"scenario_id": item["scenario_id"], "symptom": item["symptom"]}
                     for item in sanitized_feedback]

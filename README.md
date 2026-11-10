@@ -33,7 +33,7 @@ The separation of framework services and self-contained problem directories foll
 
 ## Installation
 
-Use Python 3.9 or later on Linux. The runner uses Unix file locking and directory synchronization. Run commands from the repository root; installing the project as a package is unnecessary.
+Use Python 3.8 or later on Linux. The runner uses Unix file locking and directory synchronization. Run commands from the repository root; installing the project as a package is unnecessary.
 
 ```bash
 python3 -m venv .venv
@@ -42,7 +42,7 @@ python -m pip install -r requirements.txt
 python -m evolution prepare --problem port_route_planning --run-id experiment_001
 ```
 
-`requirements.txt` includes the four pinned core libraries and NumPy/SciPy for the UAV controller. Install vLLM separately in the environment serving the local model.
+`requirements.txt` selects dependencies by Python version, including Python 3.8-compatible OpenAI SDK/Pydantic/dotenv and NumPy/SciPy for the UAV controller. Install vLLM separately in the environment serving the local model.
 
 All commands check configuration fields, parameter constraints, and component loading during initialization. `prepare` saves configuration and source snapshots without calling a model or running the simulator. It does not verify credentials, endpoint availability, or simulator readiness.
 
@@ -186,7 +186,15 @@ If fewer than P candidates qualify for behavioral selection, the implementation 
 
 ## UAV adversarial problem
 
-Use Python 3.10+ (the local `.venv` uses Python 3.12). Start UE5/ProjectAirSim manually before running. Linux needs `bwrap` (the `bubblewrap` package), `prlimit` (`util-linux`), and `/usr/bin/python3` for candidate isolation. The controller needs NumPy/SciPy from `requirements.txt`.
+Python 3.8 is supported, including the existing `/home/qincheng/venv/airsim` environment. Start UE5/ProjectAirSim manually before running. Linux needs `bwrap` (the `bubblewrap` package), `prlimit` (`util-linux`), and `/usr/bin/python3` for candidate isolation. The controller needs NumPy/SciPy from `requirements.txt`.
+
+To use the existing Python 3.8 environment:
+
+```bash
+source /home/qincheng/venv/airsim/bin/activate
+uv pip install -r requirements.txt
+python -m evolution run --problem uav_adversarial --run-id uav_py38_001
+```
 
 Install the original ProjectAirSim 0.1.1 SDK into the same environment. Its full dependency list includes old optional visualization packages; the flight adapter only needs the core client imports below:
 

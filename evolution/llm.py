@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Optional, Protocol, Type, TypeVar
+from typing import Any, Optional, Protocol, Type, TypeVar, Dict
 
 from dotenv import load_dotenv
 from openai import APIError, OpenAI
@@ -17,7 +17,7 @@ T = TypeVar("T", bound=Model)
 
 
 class LLM(Protocol):
-    def ask(self, profile: str, role: str, payload: dict[str, Any], schema: Type[T], prefix: str) -> T:
+    def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str) -> T:
         ...
 
 
@@ -27,15 +27,15 @@ class OpenAIClient:
     No endpoint/model guessing and no exception-based protocol fallback.
     """
 
-    def __init__(self, profiles: dict[str, ModelProfile], store: Store, env_path: Optional[Path] = None):
+    def __init__(self, profiles: Dict[str, ModelProfile], store: Store, env_path: Optional[Path] = None):
         # Explicit project-root path also works when called from another directory.
         # Existing environment variables take precedence over values in .env.
         load_dotenv(dotenv_path=env_path if env_path is not None else Path(__file__).resolve().parents[1] / ".env",
                     override=False)
         self.profiles, self.store = profiles, store
-        self.clients: dict[str, OpenAI] = {}
+        self.clients: Dict[str, OpenAI] = {}
 
-    def ask(self, profile: str, role: str, payload: dict[str, Any], schema: Type[T], prefix: str) -> T:
+    def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str) -> T:
         settings = self.profiles[profile]
         call = prefix + "/llm/" + artifact_id()
         request = {

@@ -1,7 +1,0 @@
-agents:
-  generator: cloud
-  tester: cloud
-  analysts: [cloud]
-  independence: cloud
-  arbiter: cloud
-  preference: cloud

@@ -32,7 +32,6 @@ execution:
   environment: {}
 
 task:
-  task_id: port_route_planning
   goal: "TODO: 填写具体问题目标"
   inputs: {observation: "TODO: 真实观测结构"}
   outputs: {action: "TODO: 真实决策结构"}

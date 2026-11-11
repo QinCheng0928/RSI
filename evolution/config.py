@@ -67,7 +67,6 @@ class AgentConfig(Model):
 
 
 class TaskSpec(Model):
-    task_id: str
     goal: str
     inputs: Dict[str, Any]
     outputs: Dict[str, Any]
@@ -123,8 +122,6 @@ class ProblemConfig(Model):
             raise ValueError("every agent must reference an explicit model profile")
         if len(self.agents.analysts) not in (1, self.evaluation.anomaly_analyst_count):
             raise ValueError("analysts must contain one shared profile or exactly m profiles")
-        if self.problem_id != self.task.task_id:
-            raise ValueError("problem_id must match task.task_id")
         return self
 
 

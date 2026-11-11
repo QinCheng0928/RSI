@@ -34,7 +34,6 @@ execution:
     decision_timeout_seconds: 1.0
 
 task:
-  task_id: uav_adversarial
   goal: >-
     Develop one shared adversarial UAV decision algorithm. A tested UAV uses a
     fixed PD+CBF controller to reach a goal. Control N adversaries, N=1..4, with

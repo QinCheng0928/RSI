@@ -4,14 +4,14 @@ template: template/algorithm.py.txt
 storage_root: runtime_data
 
 experiment:
-  population_size: 4 # 10
+  population_size: 2 # 10
   generations: 2 # 8
   seed: 42
 
 genetics:
   crossover_probability: 0.5
   mutation_probability: 0.5
-  elite_count: 2
+  elite_count: 1 # 2
 
 evaluation:
   anomaly_analyst_count: 3
@@ -19,7 +19,7 @@ evaluation:
 execution:
   simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
   simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
-  harness_hash: 9e717c0e248ecf7d6c664b9b83b23279c59040c08a0461ac2df5f2e7c85fc6d6
+  harness_hash: 7ed9f399fa3cc498ddbceebac8331b8a465d0e9e13a9ce71957d18ec62980652
   observation_schema_version: uav-ned-v1
   external_inputs_hash: live-ue5-projectairsim
   deterministic: false
@@ -37,7 +37,7 @@ task:
   task_id: uav_adversarial
   goal: >-
     Develop one shared adversarial UAV decision algorithm. A tested UAV uses a
-    fixed PD+CBF controller to reach a goal. Control N adversaries, N=1..4, with
+    fixed PD+CBF controller to reach a goal. Control N adversaries, N=1..3, with
     the same count-independent and identity-independent policy. A scalar intensity
     in [0,1] must meaningfully and progressively control interference: zero should
     permit passage, higher values should obstruct more through delay, diversion,
@@ -54,7 +54,7 @@ task:
       time: "measured elapsed simulation seconds"
       dt: 0.1
       intensity: "scalar in [0,1]"
-      num_adversaries: "N in 1..4"
+      num_adversaries: "N in 1..3"
       remaining_steps: "remaining flight horizon"
       tested: "{position: [x,y,z], velocity: [vx,vy,vz], acceleration: [ax,ay,az]}"
       adversaries: "N state dictionaries, in output order; no UAV-specific policy required"
@@ -70,7 +70,7 @@ task:
     application: "Fixed boundary/velocity CBF filter, followed by velocity integration and speed limiting"
   hard_constraints:
     - "Only modify algorithm.py; observations are acquired outside the algorithm and passed as arguments."
-    - "One shared decision rule must accept arbitrary N=1..4; do not specialize by count or UAV identity."
+    - "One shared decision rule must accept arbitrary N=1..3; do not specialize by count or UAV identity."
     - "Every initial UAV position must be within the airspace and every pair must be strictly more than 1 m apart."
     - "Avoid all collisions during interaction; adversaries must remain inside the airspace."
     - "Return the exact action schema with finite, bounded acceleration vectors."
@@ -81,7 +81,7 @@ scenario_space:
   version: uav-flight-v1
   types: [coverage, boundary, exploration, regression]
   parameter_ranges:
-    num_adversaries: {type: integer, min: 1, max: 4}
+    num_adversaries: {type: integer, min: 1, max: 3}
     initial_positions: "N+1 finite NED vectors, tested first, then adversaries; airspace inclusive"
     goal: "finite NED vector inside airspace; default [15,-10,-4]"
     intensities: "2–5 strictly increasing scalars in [0,1], including 0 and 1; default [0,0.5,1]"
@@ -91,7 +91,7 @@ scenario_space:
     - "initial_positions length equals num_adversaries+1; ALL UAV pairs must be strictly >1 m apart."
     - "All positions and goal are inside [-5,-15,-7]..[20,-5,-1]; tested start is >3 m from goal."
     - "A scenario includes a paired intensity sweep with identical seed, positions, goal and horizon."
-    - "Retain core coverage of all N=1..4; explore geometry, altitude and boundary conditions."
+    - "Retain core coverage of all N=1..3; explore geometry, altitude and boundary conditions."
     - "Propose at most two new scenarios each generation; actual flights are expensive."
 
 rubric:
@@ -151,11 +151,4 @@ core_scenarios:
     inputs:
       num_adversaries: 3
       initial_positions: [[-1.6, -10, -4], [2, -12, -4], [5, -8, -2.5], [8, -12, -4]]
-      intensities: [0, 0.5, 1]
-  - scenario_id: fleet_4
-    seed: 42
-    purpose: "Shared policy scaling to four adversaries"
-    inputs:
-      num_adversaries: 4
-      initial_positions: [[-1.6, -10, -4], [2, -12, -4], [5, -8, -2.5], [8, -12, -4], [11, -8, -4]]
       intensities: [0, 0.5, 1]

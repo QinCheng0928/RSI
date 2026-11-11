@@ -21,7 +21,7 @@ problems/port_route_planning/
   simulator.py              # Problem-owned Python simulation integration (TODO)
   template/algorithm.py.txt  # Problem-specific algorithm template
 problems/uav_adversarial/
-  problem.yaml              # Task, paired intensity sweeps, 1–4 adversary coverage
+  problem.yaml              # Task, paired intensity sweeps, 1–3 adversary coverage
   spec.py                   # Initialization and physical correctness checks
   simulator.py              # ProjectAirSim lifecycle, PD+CBF, isolated decisions
   template/algorithm.py.txt  # Shared policy interface and geometric baseline
@@ -212,7 +212,7 @@ source .venv/bin/activate
 python -m evolution run --problem uav_adversarial --run-id uav_001
 ```
 
-Set `experiment.generations` in `problems/uav_adversarial/problem.yaml` before starting a new run to choose the number of evolution rounds. Defaults are 10 candidates, generation 0 plus 8 evolution rounds, and three independent anomaly analysts. The core suite covers 1–4 adversaries; each scenario runs matched intensity values 0, 0.5 and 1. Adaptive scenarios retain the same paired-flight structure.
+Set `experiment.generations` in `problems/uav_adversarial/problem.yaml` before starting a new run to choose the number of evolution rounds. Defaults are 10 candidates, generation 0 plus 8 evolution rounds, and three independent anomaly analysts. The core suite covers 1–3 adversaries; each scenario runs matched intensity values 0, 0.5 and 1. Adaptive scenarios retain the same paired-flight structure.
 
 `simulator.py` owns scene reloads, dynamic creation of exactly N+1 UAVs, API control, arming, takeoff, scenario-state reset, observations, PD+CBF tested navigation, velocity commands, landing, disarming and disconnect. Requested initial positions, measured post-takeoff positions, and measured post-reset positions must be within the original NED airspace and **every UAV pair must be strictly more than 1 m apart at initialization**. There is no extra position-error or near-zero-velocity threshold. Each intensity flight reloads the scene and resets candidate globals. A server lock prevents concurrent experiments from controlling the same UE instance.
 

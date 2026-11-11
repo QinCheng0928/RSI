@@ -32,7 +32,7 @@ def validate_positions(positions):
 
 
 class FlightScenario(Model):
-    num_adversaries: int = Field(strict=True, ge=1, le=4)
+    num_adversaries: int = Field(strict=True, ge=1, le=3)
     initial_positions: List[Vector]
     goal: Vector = Field(default_factory=lambda: [15.0, -10.0, -4.0])
     intensities: List[Union[StrictFloat, StrictInt]] = Field(default_factory=lambda: [0.0, 0.5, 1.0])

@@ -23,7 +23,7 @@ The tested UAV uses a fixed PD+CBF navigator. Avoid every collision, keep the
 adversaries in bounds, and use intensity to control obstruction rather than
 merely changing command magnitude. No count-specific or UAV-specific policies.
 Intensity zero should allow passage; increasing intensity should produce
-stronger, observable obstruction with a shared policy across N=1..4.
+stronger, observable obstruction with a shared policy across N=1..3.
 """
 import math
 

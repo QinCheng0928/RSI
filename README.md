@@ -80,7 +80,7 @@ models:
     parameters: {}
 ```
 
-`base_url` selects the endpoint; `model` is the model identifier exposed by that endpoint. These are the configured values, not a guarantee of endpoint or model availability. Optional profile settings include `timeout_seconds` (default 120) and `max_retries` (default 2). `parameters` supplies additional request arguments such as temperature; reserved fields are rejected.
+`base_url` selects the endpoint; `model` is the model identifier exposed by that endpoint. These are the configured values, not a guarantee of endpoint or model availability. Optional profile settings include `timeout_seconds` (default 600) and `max_retries` (default 2). `parameters` supplies additional request arguments such as temperature; reserved fields are rejected.
 
 All requests use the OpenAI SDK's Chat Completions interface. A local vLLM server must expose the same protocol, for example:
 

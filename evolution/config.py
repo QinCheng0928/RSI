@@ -44,7 +44,7 @@ class ExecutionConfig(Model):
 class ModelProfile(Model):
     base_url: str
     model: str
-    timeout_seconds: float = Field(default=120, gt=0)
+    timeout_seconds: float = Field(default=600, gt=0)
     max_retries: int = Field(default=2, ge=0, le=5)
     structured_output: Literal["json_object", "json_schema"] = "json_object"
     parameters: Dict[str, Any] = Field(default_factory=dict)

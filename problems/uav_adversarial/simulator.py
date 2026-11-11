@@ -246,11 +246,31 @@ class Flight:
                                           port_services=env["port_services"])
         self.world, self.drones, self.collision = None, [], []
 
+    def _run_async(self, awaitable):
+        """Run SDK coroutines from the synchronous harness, as in ACIAT-UAV."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(awaitable)
+            return
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        raise RuntimeError(
+            "ProjectAirSim Flight was called from an active asyncio loop. "
+            "Use an async flight method or run the simulator from synchronous code."
+        )
+
     async def tasks(self, operations):
         tasks = await asyncio.gather(*operations)
         results = await asyncio.gather(*tasks)
         if any(result is False for result in results):
             raise InfrastructureError("ProjectAirSim flight command returned false")
+
+    async def _takeoff(self):
+        await asyncio.wait_for(self.tasks([d.takeoff_async() for d in self.drones]), 45)
+
+    async def _land(self):
+        await asyncio.wait_for(self.tasks([d.land_async() for d in self.drones]), 45)
 
     def reset(self, scenario):
         from projectairsim import Drone, World
@@ -273,7 +293,7 @@ class Flight:
         for drone in self.drones:
             if drone.enable_api_control() is False or drone.arm() is False:
                 raise InfrastructureError("could not enable/arm drone")
-        asyncio.run(asyncio.wait_for(self.tasks([d.takeoff_async() for d in self.drones]), 45))
+        self._run_async(self._takeoff())
         self.world.pause()
         # Reset measured kinematics after takeoff, so every paired flight starts
         # at the requested airborne position with zero velocity/acceleration.
@@ -314,12 +334,18 @@ class Flight:
             states.append(state)
         return np.asarray(states)
 
-    async def advance(self, velocities):
-        tasks = await asyncio.gather(*[d.move_by_velocity_async(
-            v_north=float(v[0]), v_east=float(v[1]), v_down=float(v[2]), duration=DT)
-            for d, v in zip(self.drones, velocities)])
+    def advance(self, velocities):
+        commands = [(drone, float(v[0]), float(v[1]), float(v[2]))
+                    for drone, v in zip(self.drones, velocities)]
+        self._run_async(self._move_by_velocities(commands, DT))
+
+    async def _move_by_velocities(self, commands, duration):
+        tasks = await asyncio.gather(*[drone.move_by_velocity_async(
+            v_north=v_north, v_east=v_east, v_down=v_down, duration=duration)
+            for drone, v_north, v_east, v_down in commands])
         step_ns = int(self.world.config_dict["clock"]["step-ns"])
-        self.world.continue_for_sim_time(round(DT * 1e9) + 100000 + step_ns, wait_until_complete=True)
+        delta_time_ns = int(round(duration * 1_000_000_000) + 100000)
+        self.world.continue_for_sim_time(delta_time_ns + step_ns, wait_until_complete=True)
         results = await asyncio.gather(*tasks)
         if any(result is False for result in results):
             raise InfrastructureError("ProjectAirSim velocity command failed")
@@ -330,7 +356,7 @@ class Flight:
             try:
                 if self.world.is_paused():
                     self.world.resume()
-                asyncio.run(asyncio.wait_for(self.tasks([d.land_async() for d in self.drones]), 45))
+                self._run_async(self._land())
             except Exception as error:
                 errors.append(str(error))
             for drone in self.drones:
@@ -452,7 +478,7 @@ class ProjectAirSimSimulator:
                             velocities = np.asarray([clip(s[3:6] + u * DT, MAX_SPEED) for s, u in zip(states, applied)])
                             history.append(snapshot)
                             previous = applied[1:]
-                            asyncio.run(flight.advance(velocities))
+                            flight.advance(velocities)
                             states = flight.observe()
                             episode["checked_steps"] = step + 1
                             positions = states[:, :3]

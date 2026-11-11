@@ -5,6 +5,8 @@ import difflib
 import random
 from pathlib import Path, PurePosixPath
 
+from pydantic import Field, create_model
+
 from evolution.config import ProblemConfig
 from evolution.errors import ContractError
 from evolution.llm import LLM
@@ -31,11 +33,21 @@ class Developer:
         variation_parents = [a for a in parents if not a.needs_repair]
         strategies = []
         if not parents:
-            plan = self.llm.ask(cfg.agents.generator, "Plan P initial algorithm strategies; do not write code.",
-                {"task": cfg.task.model_dump(), "P": p}, StrategyPlan, prefix + "/strategy_plan")
+            plan_schema = create_model(
+                f"StrategyPlan{p}", __base__=StrategyPlan,
+                strategies=(List[str], Field(min_length=p, max_length=p,
+                    description=f"Exactly {p} distinct, self-contained alternative algorithm strategies; one per candidate.")))
+            plan = self.llm.ask(cfg.agents.generator,
+                f"Plan exactly {p} distinct initial algorithm strategies for {p} separate candidates. "
+                f"Return a strategies array containing exactly {p} strings. Each string must describe "
+                "one complete, self-contained alternative algorithm that satisfies the full task. "
+                "Do not split one algorithm into components, implementation steps, safety filters, "
+                "or parameter settings as separate entries. Diversify the main decision approach "
+                "across candidates. Do not write code.",
+                {"task": cfg.task.model_dump(), "P": p}, plan_schema, prefix + "/strategy_plan")
             self.store.save(prefix + "/strategy_plan.json", plan)
             if len(plan.strategies) != p:
-                raise ContractError("strategy planner must produce P strategies")
+                raise ContractError(f"strategy planner returned {len(plan.strategies)} strategies; expected exactly {p}")
             strategies = plan.strategies
         produced, operations = [], []
         for slot in range(p):

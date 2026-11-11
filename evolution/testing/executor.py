@@ -20,8 +20,8 @@ class Executor:
     def __init__(self, cfg: ExecutionConfig, simulator: Simulator, store: Store, contract_hash: str):
         self.cfg, self.simulator, self.store, self.contract_hash = cfg, simulator, store, contract_hash
 
-    def preflight(self) -> None:
-        self.simulator.preflight(self.cfg)
+    def check_readiness(self) -> None:
+        self.simulator.check_readiness(self.cfg)
         if not self.simulator.sandboxed:
             raise InfrastructureError("simulator adapter must provide a real execution sandbox")
         if any(value == "TODO" for value in (self.cfg.simulator_version, self.cfg.harness_hash)):

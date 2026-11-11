@@ -19,7 +19,7 @@ class Simulator(Protocol):
     sandboxed: bool
     deterministic: bool
 
-    def preflight(self, config: ExecutionConfig) -> None:
+    def check_readiness(self, config: ExecutionConfig) -> None:
         """Verify simulation readiness, version fingerprints, and resource isolation.
 
         Check simulator_version against the complete environment/dynamics

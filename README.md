@@ -2,7 +2,7 @@
 
 A framework organized around **generation → testing → evaluation and selection → next-generation generation**. Each generation slot produces one candidate. Invalid output, syntax errors, interface errors, and execution failures are preserved for testing and evaluation; they do not trigger repair within the same generation. Feedback becomes available to generation operators in the following generation.
 
-The example problem `port_route_planning` remains a scaffold: its full `run` records `RUN_ABORTED` during simulator preflight. `uav_adversarial` connects to an already running UE5/ProjectAirSim instance and optimizes a shared adversarial UAV decision policy.
+The example problem `port_route_planning` remains a scaffold: its full `run` records `RUN_ABORTED` during simulator readiness checks. `uav_adversarial` connects to an already running UE5/ProjectAirSim instance and optimizes a shared adversarial UAV decision policy.
 
 ## Repository layout
 
@@ -228,7 +228,7 @@ Safety is monitored at every 0.1 s control step with continuous collision-topic 
 
 After completion, `runtime_data/uav_adversarial/uav_001/final/algorithm.py` contains the recommended decision policy, and `final/best.json` records its source, comparisons and whether a unique winner is supported. Ties, incomparable judgments and preference cycles remain explicit. If every candidate fails correctness, no deployable policy is exported. This recommendation concerns the tested suite; it is not a global-optimality guarantee.
 
-The adapter verifies its source/config/template fingerprint during preflight. After intentionally changing problem implementation files, obtain the new value below and update `execution.harness_hash`, then use a new run ID:
+The adapter verifies its source/config/template fingerprint during readiness checks. After intentionally changing problem implementation files, obtain the new value below and update `execution.harness_hash`, then use a new run ID:
 
 ```bash
 python -c 'from problems.uav_adversarial.simulator import harness_hash; print(harness_hash())'
@@ -307,9 +307,9 @@ execution:
   simulator: problems.port_route_planning.simulator:PendingSimulator
 ```
 
-This placeholder lives in the problem directory and intentionally aborts preflight. When connecting another task, place its adapter in `problems/<problem_id>/simulator.py` and reference that class in its own `problem.yaml`. Experiment overlays can select different adapters for the same problem. Configured classes are instantiated without arguments; execution settings are passed to their methods.
+This placeholder lives in the problem directory and intentionally aborts readiness checks. When connecting another task, place its adapter in `problems/<problem_id>/simulator.py` and reference that class in its own `problem.yaml`. Experiment overlays can select different adapters for the same problem. Configured classes are instantiated without arguments; execution settings are passed to their methods.
 
-Every simulator implements `Simulator` from `evolution/framework.py`: `sandboxed` and `deterministic` capability attributes, `preflight(config) -> None`, and `run(code_directory, scenario, config) -> SimulatorResult`. A problem can implement its road environment and dynamics together in Python, using `simulator.py` as the entry point and additional modules in the same problem directory. No container image is required for version identification. Testing consumes the common interface and handles execution records, infrastructure retries, evidence, and caching without importing any concrete problem simulator directly. Candidate execution isolation remains the simulator worker's responsibility.
+Every simulator implements `Simulator` from `evolution/framework.py`: `sandboxed` and `deterministic` capability attributes, `check_readiness(config) -> None`, and `run(code_directory, scenario, config) -> SimulatorResult`. A problem can implement its road environment and dynamics together in Python, using `simulator.py` as the entry point and additional modules in the same problem directory. No container image is required for version identification. Testing consumes the common interface and handles execution records, infrastructure retries, evidence, and caching without importing any concrete problem simulator directly. Candidate execution isolation remains the simulator worker's responsibility.
 
 Generated algorithms are loaded with `importlib.util` through the provided loader:
 
@@ -327,7 +327,7 @@ The adapter must return real algorithm failures as `INVALID`, or raise `Algorith
 
 The `execution` settings describe the intended execution contract:
 
-- `simulator_version` identifies the complete coupled Python simulation: road/environment implementation, dynamics models, fixed simulation data, and relevant dependency versions. Use a release identifier, commit, or combined fingerprint, and update it when any of these change. There is no separate environment-image version. The framework stores this value in execution records and cache keys; it does not calculate or verify the version automatically. The simulator's `preflight` must verify it against the actual implementation.
+- `simulator_version` identifies the complete coupled Python simulation: road/environment implementation, dynamics models, fixed simulation data, and relevant dependency versions. Use a release identifier, commit, or combined fingerprint, and update it when any of these change. There is no separate environment-image version. The framework stores this value in execution records and cache keys; it does not calculate or verify the version automatically. The simulator's `check_readiness` must verify it against the actual implementation.
 - `harness_hash`, `observation_schema_version`, and `external_inputs_hash` identify the execution harness, observation contract, and external inputs. Replace the `TODO` version/fingerprint values before running a real experiment.
 - `deterministic` and `cache_enabled` control deterministic execution and cache eligibility.
 - `infra_retries: 1` permits one retry after an execution infrastructure failure. Algorithm failures are not retried as repairs.

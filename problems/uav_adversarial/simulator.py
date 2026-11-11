@@ -451,7 +451,7 @@ class ProjectAirSimSimulator:
                     self._flight = None
                     self._batch_active = False
 
-    def preflight(self, config: ExecutionConfig):
+    def check_readiness(self, config: ExecutionConfig):
         if config.deterministic or config.cache_enabled:
             raise InfrastructureError("live UE/ProjectAirSim flights require deterministic=false and cache_enabled=false")
         if config.simulator_version != SIMULATOR_VERSION or config.harness_hash != harness_hash():

@@ -176,7 +176,7 @@ class Evolution:
                 return self.manifest("COMPLETED", population)
             try:
                 # TODO adapter blocks before spending model tokens or generating fake traces.
-                self.executor.preflight()
+                self.executor.check_readiness()
                 start = population.generation + 1 if population else 0
                 for generation in range(start, self.cfg.experiment.generations + 1):
                     prefix = self.store.attempt(generation)

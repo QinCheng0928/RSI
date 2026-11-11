@@ -17,7 +17,7 @@ class PendingSimulator:
     sandboxed = False
     deterministic = False
 
-    def preflight(self, config: ExecutionConfig) -> None:
+    def check_readiness(self, config: ExecutionConfig) -> None:
         raise SimulatorNotConfigured(
             "TODO: port_route_planning simulator interface and execution sandbox are not connected"
         )

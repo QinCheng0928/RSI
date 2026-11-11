@@ -19,7 +19,7 @@ evaluation:
 execution:
   simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
   simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
-  harness_hash: b65228035e471dc2c08a99e6f85143650972a9714a700ab50437c7f309f04740
+  harness_hash: bd2b37f3c7db88a1f6da1971d70e334a077e6a78669af34da2b50d042a79d2c8
   observation_schema_version: uav-ned-v1
   external_inputs_hash: live-ue5-projectairsim
   deterministic: false

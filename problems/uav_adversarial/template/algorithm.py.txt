@@ -11,6 +11,7 @@ observation (NED world coordinates, SI units):
   goal: [3]
   airspace: {min: [3], max: [3]}
   limits: {max_speed, max_acceleration, min_separation, goal_tolerance}
+    min_separation is an initialization requirement; flight collisions use simulator events.
   previous_accelerations: N actually applied acceleration vectors
   history: up to five previous {step, tested, adversaries} observations
 

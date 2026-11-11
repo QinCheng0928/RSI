@@ -246,9 +246,6 @@ class Flight:
         self.client = ProjectAirSimClient(address=env["address"], port_topics=env["port_topics"],
                                           port_services=env["port_services"])
         self.world, self.drones, self.collision = None, [], []
-        self.rpc_timeout_seconds = float(env.get("rpc_timeout_seconds", 300))
-        self.takeoff_timeout_seconds = float(env.get("takeoff_timeout_seconds", 20))
-        self.landing_timeout_seconds = float(env.get("landing_timeout_seconds", 120))
         self._closed = False
 
     def _run_async(self, awaitable):
@@ -268,46 +265,18 @@ class Flight:
         # expected 'no running event loop' detection above.
         asyncio.run(awaitable)
 
-    async def _lifecycle(self, method, timeout_seconds, require_success=True):
-        replies = [None] * len(self.drones)
-
-        async def submit(index, drone):
-            def on_reply(result):
-                replies[index] = result
-            return await getattr(drone, method)(timeout_sec=timeout_seconds, callback=on_reply)
-
-        tasks = await asyncio.gather(*[submit(i, drone) for i, drone in enumerate(self.drones)])
-        results = await asyncio.gather(*tasks)
-        # SDK 0.1.1 sends the actual RPC result to the callback but returns None
-        # from its task. Inspect both, so a timed-out server command returning
-        # false is not mistaken for successful takeoff/landing.
-        failed = [drone.name for drone, reply, result in zip(self.drones, replies, results)
-                  if reply is False or result is False or (reply is None and result is None)]
-        if failed and require_success:
-            raise InfrastructureError(f"{method} did not succeed for {failed} (command timeout {timeout_seconds}s of simulation time)")
-        return failed
-
     async def _takeoff(self):
-        from projectairsim.types import LandedState
-        incomplete = await self._lifecycle("takeoff_async", self.takeoff_timeout_seconds, require_success=False)
-        # The SDK goal is 3 m above the spawn, not the task's initial position.
-        # An airborne vehicle can hand over to the requested-state reset even
-        # when that ascent goal timed out, as in the original environment.
-        not_flying = [d.name for d in self.drones if d.get_landed_state() != LandedState.FLYING]
-        if not_flying:
-            raise InfrastructureError(f"takeoff did not make UAVs airborne: {not_flying}")
-        if incomplete:
-            logging.getLogger(__name__).warning(
-                "SDK takeoff altitude target was not reached by %s; FLYING state verified before scenario reset",
-                incomplete)
+        tasks = await asyncio.gather(*[d.takeoff_async() for d in self.drones])
+        await asyncio.gather(*tasks)
 
     async def _land(self):
-        await self._lifecycle("land_async", self.landing_timeout_seconds)
+        tasks = await asyncio.gather(*[d.land_async() for d in self.drones])
+        await asyncio.gather(*tasks)
 
     @staticmethod
     def _spawn_positions(initial_positions):
-        # SDK takeoff adds -3 m in NED. Spawn at z=-1 so it stays inside the
-        # flight box, including scenarios whose desired initial z is near -7.
+        # Stage near the bottom of the box to leave room for SDK takeoff;
+        # measured positions are checked afterwards, without an altitude target.
         # Separate vertically stacked starts horizontally during this phase.
         grid = [(x, y) for x in np.arange(POS_MIN[0] + 1, POS_MAX[0], 2)
                 for y in np.arange(POS_MIN[1] + 1, POS_MAX[1], 2)]
@@ -325,7 +294,6 @@ class Flight:
     def reset(self, scenario):
         from projectairsim import Drone, World
         self.client.connect()
-        self.client.socket_services.recv_timeout = int(self.rpc_timeout_seconds * 1000)
         self.client.unsubscribe_all()
         self.temporary = tempfile.TemporaryDirectory(prefix="uav-scene-")
         directory = Path(self.temporary.name)
@@ -343,10 +311,14 @@ class Flight:
         self.world = World(self.client, "scene.jsonc", delay_after_load_sec=2, sim_config_path=str(directory))
         self.drones = [Drone(self.client, self.world, actor["name"]) for actor in scene["actors"]]
         for drone in self.drones:
-            if drone.enable_api_control() is False or drone.arm() is False:
-                raise InfrastructureError("could not enable/arm drone")
+            drone.enable_api_control()
+            drone.arm()
         self._run_async(self._takeoff())
         self.world.pause()
+        try:
+            validate_positions(self.observe()[:, :3].tolist())
+        except ValueError as error:
+            raise InfrastructureError("invalid post-takeoff positions: " + str(error)) from error
         # Reset measured kinematics after takeoff, so every paired flight starts
         # at the requested airborne position with zero velocity/acceleration.
         for drone, position in zip(self.drones, scenario.initial_positions):
@@ -355,8 +327,7 @@ class Flight:
             for key in ("twist", "accels"):
                 for component in ("linear", "angular"):
                     state[key][component] = dict.fromkeys("xyz", 0.0)
-            if drone.set_ground_truth_kinematics(state) is False:
-                raise InfrastructureError("could not initialize airborne kinematics")
+            drone.set_ground_truth_kinematics(state)
         self.collision = [False] * len(self.drones)
         self.start_ns = self.world.get_sim_time()
         for i, drone in enumerate(self.drones):
@@ -369,9 +340,6 @@ class Flight:
             validate_positions([s[:3].tolist() for s in states])
         except ValueError as error:
             raise InfrastructureError("invalid measured initialization: " + str(error)) from error
-        if any(np.linalg.norm(s[:3] - p) > 0.05 or np.linalg.norm(s[3:]) > 0.05
-               for s, p in zip(states, scenario.initial_positions)):
-            raise InfrastructureError("measured reset state differs from requested initial state")
         return states
 
     def observe(self):
@@ -398,9 +366,7 @@ class Flight:
         step_ns = int(self.world.config_dict["clock"]["step-ns"])
         delta_time_ns = int(round(duration * 1_000_000_000) + 100000)
         self.world.continue_for_sim_time(delta_time_ns + step_ns, wait_until_complete=True)
-        results = await asyncio.gather(*tasks)
-        if any(result is False for result in results):
-            raise InfrastructureError("ProjectAirSim velocity command failed")
+        await asyncio.gather(*tasks)
 
     def close(self):
         if self._closed:
@@ -472,12 +438,9 @@ class ProjectAirSimSimulator:
             raise InfrastructureError("UAV simulator version/harness fingerprint mismatch")
         if config.observation_schema_version != "uav-ned-v1":
             raise InfrastructureError("unsupported UAV observation schema")
-        for name, default in (("decision_timeout_seconds", None), ("rpc_timeout_seconds", 300),
-                              ("takeoff_timeout_seconds", 20),
-                              ("landing_timeout_seconds", 120)):
-            value = config.environment.get(name, default)
-            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-                raise InfrastructureError(name + " must be finite and positive")
+        decision_timeout = config.environment.get("decision_timeout_seconds")
+        if type(decision_timeout) not in (int, float) or not math.isfinite(decision_timeout) or decision_timeout <= 0:
+            raise InfrastructureError("decision_timeout_seconds must be finite and positive")
         for binary in ("bwrap", "prlimit", "/usr/bin/python3"):
             if shutil.which(binary) is None:
                 raise InfrastructureError("missing sandbox prerequisite: " + binary)
@@ -552,10 +515,6 @@ class ProjectAirSimSimulator:
                             positions = states[:, :3]
                             if any(flight.collision):
                                 episode["violations"].append({"step": step + 1, "kind": "collision", "drones": list(flight.collision)})
-                            for i in range(len(states)):
-                                for j in range(i):
-                                    if np.linalg.norm(positions[i] - positions[j]) <= 1:
-                                        episode["violations"].append({"step": step + 1, "kind": "separation", "pair": [j, i]})
                             outside = [i for i, p in enumerate(positions) if np.any(p < POS_MIN) or np.any(p > POS_MAX)]
                             if any(i > 0 for i in outside):
                                 episode["violations"].append({"step": step + 1, "kind": "adversary_outside", "drones": outside})

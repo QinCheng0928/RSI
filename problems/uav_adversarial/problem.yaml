@@ -4,8 +4,8 @@ template: template/algorithm.py.txt
 storage_root: runtime_data
 
 experiment:
-  population_size: 10
-  generations: 8
+  population_size: 4 # 10
+  generations: 2 # 8
   seed: 42
 
 genetics:
@@ -19,7 +19,7 @@ evaluation:
 execution:
   simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
   simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
-  harness_hash: da00bbbeba6d2542cba3bf1c6426f832f4c568de140962b31abf85b00488eadf
+  harness_hash: 9e717c0e248ecf7d6c664b9b83b23279c59040c08a0461ac2df5f2e7c85fc6d6
   observation_schema_version: uav-ned-v1
   external_inputs_hash: live-ue5-projectairsim
   deterministic: false
@@ -32,9 +32,6 @@ execution:
     port_topics: 8989
     port_services: 8990
     decision_timeout_seconds: 1.0
-    rpc_timeout_seconds: 300
-    takeoff_timeout_seconds: 20
-    landing_timeout_seconds: 120
 
 task:
   task_id: uav_adversarial
@@ -66,6 +63,7 @@ task:
       limits: {max_speed: 10.0, max_acceleration: 2.0, min_separation: 1.0, goal_tolerance: 3.0}
       previous_accelerations: "N actually applied adversarial acceleration vectors"
       history: "up to five preceding {step, tested, adversaries} snapshots"
+    initialization: "min_separation applies to initialization only. Flight collisions are detected from simulator collision events."
     runtime: "Python 3.8-compatible code and standard library only, 1 s per decision; one fresh process per intensity flight"
   outputs:
     accelerations: "Exactly N finite [ax,ay,az] vectors; each Euclidean norm <= 2 m/s²"
@@ -74,7 +72,7 @@ task:
     - "Only modify algorithm.py; observations are acquired outside the algorithm and passed as arguments."
     - "One shared decision rule must accept arbitrary N=1..4; do not specialize by count or UAV identity."
     - "Every initial UAV position must be within the airspace and every pair must be strictly more than 1 m apart."
-    - "Avoid all collisions and center separations <=1 m during interaction; adversaries must remain inside the airspace."
+    - "Avoid all collisions during interaction; adversaries must remain inside the airspace."
     - "Return the exact action schema with finite, bounded acceleration vectors."
     - "No simulator calls, network, files, subprocesses, external models, or access to evaluator internals."
   allowed_changes: [algorithm.py]

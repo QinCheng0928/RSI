@@ -19,7 +19,7 @@ evaluation:
 execution:
   simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
   simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
-  harness_hash: fbdcb99477ec617b323a22176251808b570b4c61f92f641043dc070c723699b3
+  harness_hash: da00bbbeba6d2542cba3bf1c6426f832f4c568de140962b31abf85b00488eadf
   observation_schema_version: uav-ned-v1
   external_inputs_hash: live-ue5-projectairsim
   deterministic: false
@@ -32,6 +32,9 @@ execution:
     port_topics: 8989
     port_services: 8990
     decision_timeout_seconds: 1.0
+    rpc_timeout_seconds: 300
+    takeoff_timeout_seconds: 20
+    landing_timeout_seconds: 120
 
 task:
   task_id: uav_adversarial

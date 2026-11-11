@@ -19,11 +19,13 @@ Return exactly {"accelerations": [[ax, ay, az], ...]} in adversary-list order.
 There must be N finite vectors, each with Euclidean norm <= max_acceleration.
 The simulator applies its fixed boundary/velocity CBF safety filter, integrates
 the accelerations into velocity commands, then advances ProjectAirSim.
-The tested UAV uses a fixed PD+CBF navigator. Avoid every collision, keep the
-adversaries in bounds, and use intensity to control obstruction rather than
-merely changing command magnitude. No count-specific or UAV-specific policies.
+The tested UAV uses a fixed PD+CBF navigator. No UAV, including the tested UAV,
+may collide. Keep adversaries in bounds; the tested UAV may be forced outside.
+Obstruct passage through delay, diversion or tested-UAV boundary departure.
+Use intensity to control obstruction rather than merely changing command
+magnitude. No count-specific or UAV-specific policies.
 Intensity zero should allow passage; increasing intensity should produce
-stronger, observable obstruction with a shared policy across N=1..3.
+stronger, observable obstruction with a shared policy across N=1..4.
 """
 import math
 

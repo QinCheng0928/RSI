@@ -269,10 +269,6 @@ class Flight:
         tasks = await asyncio.gather(*[d.takeoff_async() for d in self.drones])
         await asyncio.gather(*tasks)
 
-    async def _land(self):
-        tasks = await asyncio.gather(*[d.land_async() for d in self.drones])
-        await asyncio.gather(*tasks)
-
     @staticmethod
     def _spawn_positions(initial_positions):
         # Stage near the bottom of the box to leave room for SDK takeoff;
@@ -293,8 +289,16 @@ class Flight:
 
     def reset(self, scenario):
         from projectairsim import Drone, World
-        self.client.connect()
+        if self._closed:
+            raise InfrastructureError("cannot reset a closed flight connection")
+        if not self.client.state:
+            self.client.connect()
         self.client.unsubscribe_all()
+        # Episode transitions reload the scene directly, without landing or
+        # disarming the old actors, just like the original environment's reset.
+        self.world, self.drones, self.collision = None, [], []
+        if hasattr(self, "temporary"):
+            self.temporary.cleanup()
         self.temporary = tempfile.TemporaryDirectory(prefix="uav-scene-")
         directory = Path(self.temporary.name)
         shutil.copyfile(DIRECTORY / "sim_config/robot_quadrotor_classic.jsonc",
@@ -369,46 +373,32 @@ class Flight:
         await asyncio.gather(*tasks)
 
     def close(self):
+        """Disconnect only; the next test reloads the scene without landing."""
         if self._closed:
             return
         self._closed = True
         errors = []
-        if self.world is not None and self.client.state:
+        if self.client.state:
             try:
-                if self.world.is_paused():
-                    self.world.resume()
-                self._run_async(self._land())
-            except Exception as error:
-                errors.append(f"landing: {type(error).__name__}: {error}")
-            for drone in self.drones:
-                if not self.client.state:
-                    break
-                for operation in (drone.disable_api_control, drone.disarm):
-                    if not self.client.state:
-                        break
-                    try:
-                        operation()
-                    except Exception as error:
-                        errors.append(f"{drone.name} control cleanup: {type(error).__name__}: {error}")
-        elif self.world is not None:
-            errors.append("connection already closed; skipped landing and control RPCs")
-        try:
-            # Also handles a partially failed connection, before a receive
-            # thread or both sockets exist (SDK disconnect assumes they do).
-            if self.client.state:
                 self.client.disconnect()
-            else:
-                for name in ("socket_topics", "socket_services"):
-                    stream = getattr(self.client, name, None)
-                    if stream is not None and not getattr(stream, "closed", False):
-                        stream.close()
-        except Exception as error:
-            errors.append(str(error))
-        finally:
-            if hasattr(self, "temporary"):
+            except Exception as error:
+                errors.append(f"disconnect: {type(error).__name__}: {error}")
+        # Also release sockets after partial connect/disconnect failures. If the
+        # SDK already disconnected on an async error, do not issue further RPCs.
+        for name in ("socket_topics", "socket_services"):
+            stream = getattr(self.client, name, None)
+            if stream is not None and not getattr(stream, "closed", False):
+                try:
+                    stream.close()
+                except Exception as error:
+                    errors.append(f"{name}: {type(error).__name__}: {error}")
+        if hasattr(self, "temporary"):
+            try:
                 self.temporary.cleanup()
+            except Exception as error:
+                errors.append(f"temporary scene cleanup: {type(error).__name__}: {error}")
         if errors:
-            raise InfrastructureError("flight cleanup failed: " + "; ".join(errors))
+            raise InfrastructureError("flight connection cleanup failed: " + "; ".join(errors))
 
 
 @contextmanager
@@ -430,6 +420,36 @@ def simulator_lock(config):
 class ProjectAirSimSimulator:
     sandboxed = True
     deterministic = False
+
+    def __init__(self):
+        self._batch_active = False
+        self._flight = None
+
+    @contextmanager
+    def testing_batch(self, config):
+        """Share one connection for a generation; disconnect without landing."""
+        if self._batch_active:
+            raise InfrastructureError("a ProjectAirSim testing batch is already active")
+        # The executor owns the complete generation's tests, including retries.
+        with simulator_lock(config):
+            self._batch_active = True
+            try:
+                yield
+            finally:
+                primary_error = sys.exc_info()[1]
+                try:
+                    if self._flight is not None:
+                        self._flight.close()
+                except Exception as error:
+                    details = f"testing batch cleanup failed: {type(error).__name__}: {error}"
+                    if primary_error is not None:
+                        raise InfrastructureError(
+                            f"{type(primary_error).__name__}: {primary_error}; {details}"
+                        ) from primary_error
+                    raise InfrastructureError(details) from error
+                finally:
+                    self._flight = None
+                    self._batch_active = False
 
     def preflight(self, config: ExecutionConfig):
         if config.deterministic or config.cache_enabled:
@@ -466,96 +486,103 @@ class ProjectAirSimSimulator:
             raise InfrastructureError("ProjectAirSim unavailable: " + str(error)) from error
 
     def run(self, code_directory: Path, scenario: Scenario, config: ExecutionConfig) -> SimulatorResult:
+        # Standalone calls clean up after this scenario's intensity sweep. The
+        # executor supplies a batch spanning all candidates/scenarios in a gen.
+        if not self._batch_active:
+            with self.testing_batch(config):
+                return self.run(code_directory, scenario, config)
         parameters = FlightScenario.model_validate(scenario.inputs)
         decisions, trajectories, episodes, logs = [], [], [], []
         deadline = time.monotonic() + config.timeout_seconds
         try:
-            with simulator_lock(config):
-                for episode_id, intensity in enumerate(parameters.intensities):
-                    worker, flight = None, None
-                    phase = "decision worker startup"
-                    try:
-                        worker = DecisionWorker(Path(code_directory), config)
-                        phase = "initialization"
-                        flight = Flight(config)
-                        states = flight.reset(parameters)
-                        initial = states[:, :3].tolist()
-                        previous = np.zeros((parameters.num_adversaries, 3))
-                        history = deque(maxlen=5)
-                        episode = {"episode": episode_id, "intensity": intensity,
-                                   "initial_positions": initial, "complete": False,
-                                   "checked_steps": 0, "violations": [], "termination": "running"}
-                        episodes.append(episode)
-                        trajectories.append(self.frame(episode_id, 0, states, flight))
-                        for step in range(parameters.max_steps):
-                            phase = f"decision step {step}"
-                            if time.monotonic() >= deadline:
-                                raise InfrastructureError("flight run wall-clock time limit exceeded")
-                            snapshot = {"step": step, "tested": self.state(states[0]),
-                                        "adversaries": [self.state(s) for s in states[1:]]}
-                            observation = {**snapshot, "time": (flight.world.get_sim_time() - flight.start_ns) / 1e9,
-                                "dt": DT, "intensity": intensity, "num_adversaries": parameters.num_adversaries,
-                                "remaining_steps": parameters.max_steps - step, "goal": parameters.goal,
-                                "airspace": {"min": POS_MIN, "max": POS_MAX},
-                                "limits": {"max_speed": MAX_SPEED, "max_acceleration": MAX_ACCEL,
-                                           "min_separation": 1.0, "goal_tolerance": GOAL_TOLERANCE},
-                                "previous_accelerations": previous.tolist(), "history": list(history)}
-                            requested = validate_action(worker.solve(observation, scenario.seed), parameters.num_adversaries)
-                            nominal = clip(0.4 * (np.asarray(parameters.goal) - states[0, :3])
-                                           - 0.6 * states[0, 3:6] - 0.05 * states[0, 6:9], MAX_ACCEL)
-                            applied = np.asarray([control(states[0], nominal, states[1:]),
-                                *[control(s, u) for s, u in zip(states[1:], requested)]])
-                            velocities = np.asarray([clip(s[3:6] + u * DT, MAX_SPEED) for s, u in zip(states, applied)])
-                            history.append(snapshot)
-                            previous = applied[1:]
-                            phase = f"flight control step {step}"
-                            flight.advance(velocities)
-                            states = flight.observe()
-                            episode["checked_steps"] = step + 1
-                            positions = states[:, :3]
-                            if any(flight.collision):
-                                episode["violations"].append({"step": step + 1, "kind": "collision", "drones": list(flight.collision)})
-                            outside = [i for i, p in enumerate(positions) if np.any(p < POS_MIN) or np.any(p > POS_MAX)]
-                            if any(i > 0 for i in outside):
-                                episode["violations"].append({"step": step + 1, "kind": "adversary_outside", "drones": outside})
-                            if episode["violations"]:
-                                reason = "physical_constraint_violation"
-                            elif 0 in outside:
-                                reason = "tested_left_airspace"
-                            elif np.linalg.norm(positions[0] - parameters.goal) <= GOAL_TOLERANCE:
-                                reason = "tested_reached_goal"
-                            elif step + 1 == parameters.max_steps:
-                                reason = "time_limit"
-                            else:
-                                reason = "running"
-                            if step % TRACE_STRIDE == 0 or reason != "running":
-                                decisions.append({"episode": episode_id, "step": step,
-                                    "requested_accelerations": requested.round(5).tolist(),
-                                    "applied_accelerations": applied.round(5).tolist()})
-                                trajectories.append(self.frame(episode_id, step + 1, states, flight))
-                            if reason != "running":
-                                episode.update(complete=True, termination=reason)
-                                break
-                        logs.append(worker.log)
-                    finally:
-                        primary_error = sys.exc_info()[1]
-                        cleanup_errors = []
-                        # Stop candidate code before touching the live flight lifecycle.
-                        for resource in (worker, flight):
-                            if resource is not None:
-                                try:
-                                    resource.close()
-                                except Exception as error:
-                                    cleanup_errors.append(f"{type(error).__name__}: {error}")
-                        if cleanup_errors:
-                            details = "; ".join(cleanup_errors)
-                            if primary_error is not None:
-                                raise InfrastructureError(
-                                    f"scenario {scenario.scenario_id}, intensity {intensity}, {phase} failed: "
-                                    f"{type(primary_error).__name__}: {primary_error}; cleanup also failed: {details}"
-                                ) from primary_error
+            for episode_id, intensity in enumerate(parameters.intensities):
+                worker, flight = None, None
+                phase = "decision worker startup"
+                try:
+                    worker = DecisionWorker(Path(code_directory), config)
+                    phase = "initialization"
+                    if self._flight is None:
+                        self._flight = Flight(config)
+                    flight = self._flight
+                    states = flight.reset(parameters)
+                    initial = states[:, :3].tolist()
+                    previous = np.zeros((parameters.num_adversaries, 3))
+                    history = deque(maxlen=5)
+                    episode = {"episode": episode_id, "intensity": intensity,
+                               "initial_positions": initial, "complete": False,
+                               "checked_steps": 0, "violations": [], "termination": "running"}
+                    episodes.append(episode)
+                    trajectories.append(self.frame(episode_id, 0, states, flight))
+                    for step in range(parameters.max_steps):
+                        phase = f"decision step {step}"
+                        if time.monotonic() >= deadline:
+                            raise InfrastructureError("flight run wall-clock time limit exceeded")
+                        snapshot = {"step": step, "tested": self.state(states[0]),
+                                    "adversaries": [self.state(s) for s in states[1:]]}
+                        observation = {**snapshot, "time": (flight.world.get_sim_time() - flight.start_ns) / 1e9,
+                            "dt": DT, "intensity": intensity, "num_adversaries": parameters.num_adversaries,
+                            "remaining_steps": parameters.max_steps - step, "goal": parameters.goal,
+                            "airspace": {"min": POS_MIN, "max": POS_MAX},
+                            "limits": {"max_speed": MAX_SPEED, "max_acceleration": MAX_ACCEL,
+                                       "min_separation": 1.0, "goal_tolerance": GOAL_TOLERANCE},
+                            "previous_accelerations": previous.tolist(), "history": list(history)}
+                        requested = validate_action(worker.solve(observation, scenario.seed), parameters.num_adversaries)
+                        nominal = clip(0.4 * (np.asarray(parameters.goal) - states[0, :3])
+                                       - 0.6 * states[0, 3:6] - 0.05 * states[0, 6:9], MAX_ACCEL)
+                        applied = np.asarray([control(states[0], nominal, states[1:]),
+                            *[control(s, u) for s, u in zip(states[1:], requested)]])
+                        velocities = np.asarray([clip(s[3:6] + u * DT, MAX_SPEED) for s, u in zip(states, applied)])
+                        history.append(snapshot)
+                        previous = applied[1:]
+                        phase = f"flight control step {step}"
+                        flight.advance(velocities)
+                        states = flight.observe()
+                        episode["checked_steps"] = step + 1
+                        positions = states[:, :3]
+                        if any(flight.collision):
+                            episode["violations"].append({"step": step + 1, "kind": "collision", "drones": list(flight.collision)})
+                        outside = [i for i, p in enumerate(positions) if np.any(p < POS_MIN) or np.any(p > POS_MAX)]
+                        if any(i > 0 for i in outside):
+                            episode["violations"].append({"step": step + 1, "kind": "adversary_outside", "drones": outside})
+                        if episode["violations"]:
+                            reason = "physical_constraint_violation"
+                        elif 0 in outside:
+                            reason = "tested_left_airspace"
+                        elif np.linalg.norm(positions[0] - parameters.goal) <= GOAL_TOLERANCE:
+                            reason = "tested_reached_goal"
+                        elif step + 1 == parameters.max_steps:
+                            reason = "time_limit"
+                        else:
+                            reason = "running"
+                        if step % TRACE_STRIDE == 0 or reason != "running":
+                            decisions.append({"episode": episode_id, "step": step,
+                                "requested_accelerations": requested.round(5).tolist(),
+                                "applied_accelerations": applied.round(5).tolist()})
+                            trajectories.append(self.frame(episode_id, step + 1, states, flight))
+                        if reason != "running":
+                            episode.update(complete=True, termination=reason)
+                            break
+                    logs.append(worker.log)
+                finally:
+                    primary_error = sys.exc_info()[1]
+                    cleanup_errors = []
+                    # Candidate globals are isolated per intensity. The flight
+                    # stays paused until the next reset or batch disconnect.
+                    for resource in (worker,):
+                        if resource is not None:
+                            try:
+                                resource.close()
+                            except Exception as error:
+                                cleanup_errors.append(f"{type(error).__name__}: {error}")
+                    if cleanup_errors:
+                        details = "; ".join(cleanup_errors)
+                        if primary_error is not None:
                             raise InfrastructureError(
-                                f"scenario {scenario.scenario_id}, intensity {intensity}, cleanup failed: {details}")
+                                f"scenario {scenario.scenario_id}, intensity {intensity}, {phase} failed: "
+                                f"{type(primary_error).__name__}: {primary_error}; cleanup also failed: {details}"
+                            ) from primary_error
+                        raise InfrastructureError(
+                            f"scenario {scenario.scenario_id}, intensity {intensity}, cleanup failed: {details}")
         except AlgorithmExecutionError as error:
             return SimulatorResult(status=Status.INVALID, decisions=decisions, trajectories=trajectories,
                                    context={"episodes": episodes}, failure_category=error.category, stderr=str(error))

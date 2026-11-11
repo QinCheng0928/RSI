@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import ExitStack
 from typing import Dict, List
 
 import uuid
@@ -70,6 +71,16 @@ class Executor:
         return RunUse(individual_id=individual.individual_id, record=record, cache_hit=True, record_ref=cached["record_ref"])
 
     def run(self, pool: List[Individual], suite: ScenarioSuite, prefix: str) -> Dict[str, List[RunUse]]:
+        # One call covers a generation's entire candidate pool and scenario suite.
+        # Adapters may retain resources within this batch and release them before
+        # evaluation starts, including when execution aborts.
+        with ExitStack() as resources:
+            testing_batch = getattr(self.simulator, "testing_batch", None)
+            if testing_batch is not None:
+                resources.enter_context(testing_batch(self.cfg))
+            return self._run(pool, suite, prefix)
+
+    def _run(self, pool: List[Individual], suite: ScenarioSuite, prefix: str) -> Dict[str, List[RunUse]]:
         output, coverage, real_calls = {}, [], 0
         use_cache = self.cfg.cache_enabled and self.cfg.deterministic and self.simulator.deterministic
         for individual in pool:

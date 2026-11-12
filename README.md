@@ -151,6 +151,8 @@ genetics:
 
 算法实现 `solve(observation, seed)`，接收仿真器获取的观测，返回 N 个加速度向量。生成代码只允许使用 Python 标准库，在隔离子进程中执行。接口细节见[算法模板](problems/uav_adversarial/template/algorithm.py.txt)。
 
+每个控制步都记录请求与实际应用的加速度，以及该步结束后的飞行状态，并保留初始化和终止状态。行为分析与候选比较接收完整的逐步记录。
+
 连接和决策超时配置位于 `execution.environment`：
 
 ```yaml

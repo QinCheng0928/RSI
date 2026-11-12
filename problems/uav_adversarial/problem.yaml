@@ -19,7 +19,7 @@ evaluation:
 execution:
   simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
   simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
-  harness_hash: bd2b37f3c7db88a1f6da1971d70e334a077e6a78669af34da2b50d042a79d2c8
+  harness_hash: baedb8a73098fe5637cbabe5959a3c891a7ef7e9d3ee5d04bacbb97b26512f8d
   observation_schema_version: uav-ned-v1
   external_inputs_hash: live-ue5-projectairsim
   deterministic: false
@@ -102,7 +102,7 @@ rubric:
     - "At zero intensity examine whether adversaries permit passage; at higher intensity consider delay, diversion and tested-UAV boundary departure in context."
     - "Consider coordinated interaction, stability, robustness to geometry and fleet size, and observed tradeoffs."
     - "No fixed fitness formula, numerical quality score, anomaly-count proxy, or imported reference objective."
-    - "Traces are sampled every 25 control steps and at termination; safety is monitored every control step and collision events are subscribed continuously. Do not invent unobserved motion."
+    - "Record decisions and trajectories at every control step, retaining initial and terminal states. Analyze the complete step-by-step records. Safety is monitored every control step and collision events are subscribed continuously. Do not invent unobserved motion."
   tradeoff_guidance: >-
     Compare candidates on identical scenario and intensity coverage. Explain
     conflicting evidence, physical limits and uncertainty. A stronger command

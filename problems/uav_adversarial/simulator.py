@@ -38,7 +38,6 @@ from .spec import FlightScenario, POS_MAX, POS_MIN, validate_positions
 DIRECTORY = Path(__file__).resolve().parent
 SIMULATOR_VERSION = "projectairsim-0.1.1-fast-physics-uav-v1"
 DT, MAX_SPEED, MAX_ACCEL, GOAL_TOLERANCE = 0.1, 10.0, 2.0, 3.0
-TRACE_STRIDE = 25
 WORKER_ENV = {"PATH": "/usr/bin:/bin", "PYTHONHASHSEED": "0", "LANG": "C.UTF-8"}
 
 
@@ -554,11 +553,10 @@ class ProjectAirSimSimulator:
                             reason = "time_limit"
                         else:
                             reason = "running"
-                        if step % TRACE_STRIDE == 0 or reason != "running":
-                            decisions.append({"episode": episode_id, "step": step,
-                                "requested_accelerations": requested.round(5).tolist(),
-                                "applied_accelerations": applied.round(5).tolist()})
-                            trajectories.append(self.frame(episode_id, step + 1, states, flight))
+                        decisions.append({"episode": episode_id, "step": step,
+                            "requested_accelerations": requested.round(5).tolist(),
+                            "applied_accelerations": applied.round(5).tolist()})
+                        trajectories.append(self.frame(episode_id, step + 1, states, flight))
                         if reason != "running":
                             episode.update(complete=True, termination=reason)
                             break
@@ -591,7 +589,7 @@ class ProjectAirSimSimulator:
         except Exception as error:
             raise InfrastructureError("ProjectAirSim flight failed: " + str(error)) from error
         return SimulatorResult(status=Status.EXECUTABLE, decisions=decisions, trajectories=trajectories,
-            context={"episodes": episodes, "trace_stride": TRACE_STRIDE,
+            context={"episodes": episodes, "trace_stride": 1,
                      "safety_monitor_stride": 1, "runtime": getattr(self, "runtime", {})},
             stdout="\n".join(logs)[-8192:])
 

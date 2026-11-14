@@ -6,19 +6,37 @@
   <a href="docs/README.zh-CN.md">简体中文</a>
 </p>
 
-A research framework for generating, testing, and evolving algorithms with large language models. Models judge behavior from task descriptions and evidence collected through actual interaction; the framework manages candidate code, test scenarios, evaluation feedback, and population evolution.
+A research framework for evolving executable algorithms through interaction with external environments. Large language models propose candidate implementations and assess their behavior from task descriptions, explicit constraints, and recorded execution evidence.
 
-The project targets algorithm optimization tasks that require interaction with external environments and lack an explicit numerical fitness function. Each problem is a self-contained package defining the task, environment interaction, and evaluation contract.
+The framework addresses settings in which algorithm quality is difficult to express as a single numerical fitness function. It separates candidate generation, environment execution, hard-constraint checking, behavioral analysis, and population selection, while preserving the artifacts needed to inspect how a recommendation was obtained.
 
-## Features
+## Research scope
 
-- Population-based algorithm search with repair, crossover, and mutation operators.
-- Separate execution and constraint failures from weak behavioral performance, with diagnoses used for repair in the next generation.
-- Test parents and offspring on a common scenario suite, then select using multiple analysts and pairwise comparisons.
-- Archive candidate code, model interactions, execution evidence, and evaluation records; resume from committed generations.
-- Integrate problems through shared interfaces while keeping environment interaction and candidate isolation inside each problem's simulator.
+The optimization target is a population of executable decision algorithms. A problem package supplies the task definition, scenario space, environment adapter, and correctness rules. The framework supplies the evolutionary procedure and the evidence flow between its components.
 
-## Repository layout
+The method relies on three distinctions:
+
+- **Correctness and quality.** Programmatic checks establish compliance with specified hard constraints; model-based analysis judges behavioral quality among eligible candidates.
+- **Algorithm and infrastructure failures.** Candidate failures inform subsequent repair. Environment and service failures receive bounded retries and can abort an experiment without becoming performance judgments.
+- **Observation and interpretation.** Execution records establish what was observed. Behavioral explanations and preferences remain judgments supported by those records.
+
+The implementation supports systematic investigation of these mechanisms. Empirical claims about optimization effectiveness require an experimental protocol, repeated runs, and appropriate comparisons.
+
+## Method
+
+Let `P` denote the retained population size and `G` the number of evolution rounds after initialization. Generation 0 creates `P` candidates. Each subsequent generation evaluates a pool of up to `2P` parents and offspring, then retains `P` candidates.
+
+1. **Generate candidates.** The initial population is generated from distinct strategy proposals. In later generations, each retained parent that failed execution or correctness receives one repair offspring. Remaining offspring slots use crossover or mutation among healthy parents. With one healthy parent, these slots use mutation. Each slot produces one candidate outcome; failures discovered during evaluation are handled by operators in the next generation.
+2. **Construct a common test suite.** The tester uses the task, scenario space, coverage, and sanitized feedback without receiving candidate source code or lineage. It combines predefined, historical, regression, and newly proposed scenarios. Generation 0 establishes the core suite; subsequent adaptive scenarios accumulate. Parents and offspring are executed on the same current suite.
+3. **Check execution and correctness.** The executor records decisions, trajectories, errors, and provenance. Execution failures, hard-constraint violations, and missing required evidence produce diagnoses. Infrastructure failures are retried up to the configured limit and abort the batch if unresolved.
+4. **Analyze eligible behavior.** Multiple analysts first produce hypotheses in separate contexts. Their outputs are sealed before dependence analysis and cross-review. Evidence retrieval verifies record existence and provenance; an arbiter reviews claims against the available evidence and counterarguments. Separate contexts do not establish statistical independence, and provenance checks do not prove the semantic validity of a claim.
+5. **Compare and select.** Eligible candidates are compared in both presentation orders. Inconsistent judgments become incomparable. Selection uses the resulting preference graph and code, strategy, and lineage diversity. If fewer than `P` candidates qualify, failed candidates can occupy remaining positions for future repair. Reviewed feedback becomes available to the next generation only.
+
+For `K` eligible candidates, pairwise evaluation makes `K × (K - 1)` logical comparison calls. A pool of at most `2P` candidates gives an upper bound of `2P × (2P - 1)` per generation. These counts exclude generation, scenario construction, behavioral analysis, arbitration, and transport retries.
+
+Implementation references: [generation](evolution/generation/developer.py), [testing](evolution/testing/executor.py), [behavioral evaluation](evolution/evaluation/evaluator.py), and [selection](evolution/evaluation/selector.py).
+
+## Architecture
 
 ```text
 evolution/
@@ -34,89 +52,6 @@ requirements.txt
 ```
 
 Each problem owns its `problem.yaml`, `spec.py`, `simulator.py`, and algorithm template. The top-level `problem_id` is the sole problem identifier; `task` defines the goal, inputs, outputs, and constraints.
-
-## Installation
-
-Use Linux and Python 3.8 or a compatible later version. Run commands from the repository root:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-The framework uses Linux file locking. Each problem's adapter must also provide its own environment dependencies, candidate isolation, and readiness checks; these requirements depend on the environment being integrated.
-
-## Model configuration
-
-Configure these sections in the problem's `problem.yaml`:
-
-- `models`: service endpoints, model names, timeouts, and request parameters.
-- `agents`: model profiles assigned to generation, testing, analysis, and judging roles.
-
-The framework uses the OpenAI-compatible Chat Completions interface with remote services or a local vLLM server. The service must support the configured `json_object` or `json_schema` output mode.
-
-Create `.env` in the repository root:
-
-```dotenv
-LLM_CLOUD_API_KEY_ENV=OPENAI_API_KEY
-OPENAI_API_KEY=replace-with-your-cloud-key
-
-LLM_LOCAL_API_KEY_ENV=VLLM_API_KEY
-VLLM_API_KEY=local-development
-```
-
-`LLM_CLOUD_API_KEY_ENV` and `LLM_LOCAL_API_KEY_ENV` name the environment variables containing the corresponding keys. Configure credentials for the profiles you actually use. Existing process environment variables take precedence over `.env`; a local service's key must match its server configuration.
-
-Git ignores `.env`. Keep credentials in environment variables or the root `.env`, outside the archived `problem.yaml`.
-
-## Run an experiment
-
-Configure model access and the selected problem's environment first. Replace `your_problem` with an existing directory name under `problems/`:
-
-```bash
-source .venv/bin/activate
-python -m evolution run --problem your_problem --run-id experiment_001
-```
-
-Set the experiment size in the problem configuration. This is a small example; the corresponding `problem.yaml` determines the actual settings:
-
-```yaml
-experiment:
-  population_size: 4
-  generations: 2
-  seed: 42
-
-genetics:
-  crossover_probability: 0.5
-  mutation_probability: 0.5
-  elite_count: 1
-```
-
-`population_size` is the number of retained candidates per generation. `generations: 2` runs two evolution rounds after the initial generation, `gen_0000`. Each subsequent round generates P offspring, tests and evaluates them alongside P parents, and retains P candidates. `elite_count` must be smaller than P, and crossover and mutation probabilities must sum to 1.
-
-Other commands accept the same `--problem` and `--run-id` arguments:
-
-| Command | Purpose |
-| --- | --- |
-| `python -m evolution prepare` | Save configuration and source snapshots without calling models or checking simulator readiness |
-| `python -m evolution generate` | Generate candidates without executing tests |
-| `python -m evolution build-suite` | Construct a scenario suite without executing candidates |
-| `python -m evolution run` | Run the complete optimization process |
-
-`generate` and `build-suite` require a working model service. Pass `--problem` explicitly to select the intended problem package.
-
-Reuse the same `run-id` with unchanged configuration and source code to resume from committed generations. Use a new `run-id` after changing problem configuration, problem implementation, or framework code.
-
-## Evolution and evaluation
-
-Each generation slot produces one candidate. Failures discovered in a generation do not trigger repair and rerun within that generation. Each failed parent retained from the previous generation receives one repair offspring; remaining slots use crossover or mutation among healthy parents. With only one healthy parent, these slots use mutation.
-
-Execution failures, invalid outputs, hard-constraint violations, and missing evidence receive failure diagnoses. Candidates that pass checks proceed to behavioral analysis, cross-review, and pairwise preference comparison. Infrastructure failures receive bounded retries; exhausted retries abort the run rather than becoming algorithm performance judgments.
-
-Selection prioritizes candidates that pass checks. If fewer than P qualify, failed candidates may fill the remaining places for repair in the next generation. Each eligible pair is compared in both orders, so evaluation requests grow approximately quadratically with the eligible population. Choose the experiment size with model cost and simulation time in mind.
-
-The final output is a recommendation supported by the current test suite. Ties, incomparability, and preference cycles remain explicit; the framework does not guarantee a unique or globally optimal algorithm.
 
 ## Problem package structure
 
@@ -212,7 +147,101 @@ The template defines the synchronous `solve(observation, seed)` entry point, exp
 
 The simulator collects observations outside the candidate and supplies them as arguments. Generated files are restricted by `task.allowed_changes`, including the required `algorithm.py`. Environment setup, correctness checks, and evaluator internals stay outside generated code.
 
-## Inspect results
+## Installation
+
+Use Linux and Python 3.8 or a compatible later version. Run commands from the repository root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+The framework uses Linux file locking. Each problem's adapter must also provide its own environment dependencies, candidate isolation, and readiness checks; these requirements depend on the environment being integrated.
+
+## Model configuration
+
+Configure these sections in the problem's `problem.yaml`:
+
+- `models`: service endpoints, model names, timeouts, and request parameters.
+- `agents`: model profiles assigned to generation, testing, analysis, and judging roles.
+
+The framework uses the OpenAI-compatible Chat Completions interface with remote services or a local vLLM server. The service must support the configured `json_object` or `json_schema` output mode.
+
+Create `.env` in the repository root:
+
+```dotenv
+LLM_CLOUD_API_KEY_ENV=OPENAI_API_KEY
+OPENAI_API_KEY=replace-with-your-cloud-key
+
+LLM_LOCAL_API_KEY_ENV=VLLM_API_KEY
+VLLM_API_KEY=local-development
+```
+
+`LLM_CLOUD_API_KEY_ENV` and `LLM_LOCAL_API_KEY_ENV` name the environment variables containing the corresponding keys. Configure credentials for the profiles you actually use. Existing process environment variables take precedence over `.env`; a local service's key must match its server configuration.
+
+Git ignores `.env`. Keep credentials in environment variables or the root `.env`, outside the archived `problem.yaml`.
+
+## Run an experiment
+
+Configure model access and the selected problem's environment first. Replace `your_problem` with an existing directory name under `problems/`:
+
+```bash
+source .venv/bin/activate
+python -m evolution run --problem your_problem --run-id experiment_001
+```
+
+Set the experiment size in the problem configuration. This is a small example; the corresponding `problem.yaml` determines the actual settings:
+
+```yaml
+experiment:
+  population_size: 4
+  generations: 2
+  seed: 42
+
+genetics:
+  crossover_probability: 0.5
+  mutation_probability: 0.5
+  elite_count: 1
+```
+
+`population_size` is the number of retained candidates per generation. `generations: 2` runs two evolution rounds after the initial generation, `gen_0000`. Each subsequent round generates P offspring, tests and evaluates them alongside P parents, and retains P candidates. `elite_count` must be smaller than P, and crossover and mutation probabilities must sum to 1.
+
+Other commands accept the same `--problem` and `--run-id` arguments:
+
+| Command | Purpose |
+| --- | --- |
+| `python -m evolution prepare` | Save configuration and source snapshots without calling models or checking simulator readiness |
+| `python -m evolution generate` | Generate candidates without executing tests |
+| `python -m evolution build-suite` | Construct a scenario suite without executing candidates |
+| `python -m evolution run` | Run the complete optimization process |
+
+`generate` and `build-suite` require a working model service. Pass `--problem` explicitly to select the intended problem package.
+
+Reuse the same `run-id` with unchanged configuration and source code to resume from committed generations. Use a new `run-id` after changing problem configuration, problem implementation, or framework code.
+
+## Reproducibility and experimental reporting
+
+Each run freezes its resolved configuration and snapshots of problem and framework source. Execution records bind candidate code, scenario inputs, seed, simulator version, environment settings, and observation-contract fingerprints. Population commits provide the durable boundary for recovery.
+
+Reuse a `run-id` only with unchanged configuration and source code. A resumed run recovers committed populations and may reuse completed generation or scenario-construction stages. Tests required by a new generation are executed again. Changes to configuration, problem implementation, or framework source require a new `run-id`.
+
+A fixed framework seed controls its own sampling and tie-breaking. It does not make remote model responses or an external environment deterministic. State variation, environment updates, and asynchronous communication can change observed behavior, so evaluation uses the current generation's execution evidence.
+
+For research reporting, preserve the following alongside the exported algorithm:
+
+| Item | Information to report |
+| --- | --- |
+| Software and environment | Repository revision, Python and dependency versions, adapter version, external environment build, and initialization procedure |
+| Models and prompts | Provider, model identifier or available revision, request parameters, output mode, prompts, and archived responses |
+| Search protocol | Population size, rounds, operator probabilities, analyst count, retry and resource limits, seeds, and stopping conditions |
+| Scenarios and evidence | Predefined and adaptive suites, scenario history, observation/action contracts, recording granularity, and constraint checks |
+| Budget and outcomes | Model-call counts, execution attempts, runtime or cost, failures, and final recommendation status |
+| Validation protocol | Repeated independent runs and separate evaluation cases for claims about robustness or generalization |
+
+Adaptive scenarios participate in optimization and should be distinguished from independent evaluation cases. The exported recommendation reflects the collected search evidence; generalization requires additional validation.
+
+## Artifacts and result interpretation
 
 Artifacts are saved under `runtime_data/<problem_id>/<run_id>/`:
 
@@ -231,4 +260,14 @@ experiment_manifest.json   # Overall status, progress, eligible IDs, abort reaso
 
 Model requests and responses, failure diagnoses, test trajectories, and comparisons are archived in the experiment directory. `COMPLETED` means that the process finished, not that a usable algorithm was found. If no final candidate qualifies, `final/best.json` records `NO_VALID_CANDIDATE` and no recommendation code is exported.
 
-The framework's module organization draws on [LACE](https://github.com/PJ-NTU/LACE).
+Interpret recommendation statuses together with the underlying selection report:
+
+| Status | Interpretation |
+| --- | --- |
+| `NO_VALID_CANDIDATE` | No eligible candidate is available for export |
+| `ONLY_VALID_CANDIDATE` | One candidate qualifies; comparative superiority is not established |
+| `UNIQUE_PREFERENCE_WINNER` | The final comparison graph supports a consistent win against every other eligible candidate |
+| `UNRESOLVED_FRONTIER` | An undefeated frontier remains without a unique supported winner |
+| `CYCLIC_PREFERENCES` | Preference cycles prevent an undefeated frontier |
+
+These statuses describe the final suite and recorded judgments. They establish neither global optimality nor a formal safety guarantee. Correctness is limited by the implemented checks and available observations; model-based assessments can remain uncertain or correlated.

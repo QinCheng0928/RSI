@@ -81,5 +81,4 @@ class OpenAIClient:
         except ValidationError as error:
             self.store.save(call + "/error.json", {"category": "SCHEMA_VALIDATION", "detail": str(error)})
             raise ContractError("invalid model JSON; see " + call) from error
-        self.store.save(call + "/validated.json", parsed)
         return parsed

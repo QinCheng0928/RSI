@@ -251,7 +251,6 @@ individuals/<id>/code/     # 各候选的 algorithm.py
 individuals/<id>/          # 元数据、父代关系及修改记录
 generations/               # 每代的生成、测试与评估记录
 populations/               # 已提交的种群与恢复指针
-memory/                    # 供后续代使用的评审反馈
 objects/                   # 执行证据、日志与快照等内容对象
 final/best.json            # 最终推荐结果与依据
 final/algorithm.py         # 存在合格候选时导出的推荐代码
@@ -259,6 +258,8 @@ experiment_manifest.json   # 整体状态、进度、可用候选与中止原因
 ```
 
 模型请求和回复、失败诊断、测试轨迹及比较记录都保存在实验目录中。`COMPLETED` 表示流程已完成，不保证存在可用算法；若最终没有合格候选，`final/best.json` 会记录 `NO_VALID_CANDIDATE`，不会导出推荐代码。
+
+解析后的模型结果保存在各阶段的结果文件中，同时保留原始请求与回复，不再额外保存 `validated.json` 副本。场景提案统一保存为 `testing/delta_suite.json`，完整场景集保存为 `testing/suite.json`。评审反馈保留在已提交尝试对应的 `memory_event.json` 中，恢复时通过种群中的选择报告引用定位并直接读取。
 
 应结合底层选择报告解释最终推荐状态：
 

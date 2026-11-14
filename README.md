@@ -251,7 +251,6 @@ individuals/<id>/code/      # Each candidate's algorithm.py
 individuals/<id>/           # Metadata, parent relationships, and changes
 generations/               # Per-generation production, testing, and evaluation
 populations/               # Committed populations and recovery pointers
-memory/                    # Reviewed feedback for subsequent generations
 objects/                   # Execution evidence, logs, and snapshot objects
 final/best.json            # Final recommendation and its basis
 final/algorithm.py         # Exported code when an eligible candidate exists
@@ -259,6 +258,8 @@ experiment_manifest.json   # Overall status, progress, eligible IDs, abort reaso
 ```
 
 Model requests and responses, failure diagnoses, test trajectories, and comparisons are archived in the experiment directory. `COMPLETED` means that the process finished, not that a usable algorithm was found. If no final candidate qualifies, `final/best.json` records `NO_VALID_CANDIDATE` and no recommendation code is exported.
+
+Parsed model results are saved in their stage-specific artifacts, alongside raw requests and responses, without a separate `validated.json` copy. Scenario proposals use `testing/delta_suite.json`; the complete suite uses `testing/suite.json`. Reviewed feedback is retained in each committed attempt's `memory_event.json` and loaded directly through the population's selection-report reference during recovery.
 
 Interpret recommendation statuses together with the underlying selection report:
 

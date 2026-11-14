@@ -33,7 +33,7 @@ class Tester:
             "Include boundary/coverage, regression, issue-driven and exploration cases. "
             "No algorithm implementation or lineage is available. Use stable scenario IDs.",
             payload, ScenarioProposal, prefix + "/testing/scenario_generation")
-        self.store.save(prefix + "/testing/proposal.json", proposal)
+        self.store.save(prefix + "/testing/delta_suite.json", proposal)
         unique, names = {}, {}
         for scenario in core + previous + regression + proposal.scenarios:
             self.spec.validate_scenario(scenario)
@@ -44,8 +44,5 @@ class Tester:
         suite = ScenarioSuite(generation=generation, scenarios=list(unique.values()),
             scenario_space_version=self.space.version, rubric_version=self.rubric.rubric_version)
         self.store.save(prefix + "/testing/suite.json", suite)
-        self.store.save(prefix + "/testing/delta_suite.json", proposal)
-        if generation == 0:
-            self.store.save(prefix + "/testing/core_suite.json", suite)
         self.store.save(prefix + "/testing/regression_suite.json", [s.model_dump() for s in regression])
         return suite

@@ -165,13 +165,12 @@ class Evolution:
             population = self.store.load_population(self.cfg.experiment.population_size)
             if population and population.config_hash != self.fingerprint:
                 raise ContractError("population configuration differs from frozen run")
-            # Restore reviewed memory if a crash followed population commit.
-            for path in sorted(self.store.path("populations").glob("gen_*.json")):
+            reviewed_memory = []
+            for path in sorted(self.store.path("populations").glob("gen_*.json"))[-3:]:
                 committed = self.store.read(str(path.relative_to(self.store.root)))
                 report_ref = committed["selection_report_ref"]
                 attempt = report_ref.rsplit("/evaluation/", 1)[0]
-                self.store.save(f"memory/gen_{committed['generation']:04d}.json",
-                                self.store.read(attempt + "/memory_event.json"))
+                reviewed_memory.append(self.store.read(attempt + "/memory_event.json"))
             if population and population.generation == self.cfg.experiment.generations:
                 return self.manifest("COMPLETED", population)
             try:
@@ -182,10 +181,8 @@ class Evolution:
                     prefix = self.store.attempt(generation)
                     previous = self.previous_state(population)
                     parents = population.assessments if population else []
-                    memory = [self.store.read(str(p.relative_to(self.store.root)))
-                        for p in sorted(self.store.path("memory").glob("gen_*.json"))[-3:]]
                     developer_feedback = {"selected_assessments": [a.model_dump(mode="json") for a in parents],
-                        "reviewed_memory": memory, "behavior_feedback": {}}
+                        "reviewed_memory": reviewed_memory, "behavior_feedback": {}}
                     for parent in parents:
                         if parent.profile_ref:
                             profile = self.store.read(parent.profile_ref)
@@ -241,7 +238,7 @@ class Evolution:
                     self.store.save(prefix + "/memory_event.json", memory_event)
                     self.store.commit(new_population, self.cfg.experiment.population_size)
                     population = new_population
-                    self.store.save(f"memory/gen_{generation:04d}.json", memory_event)
+                    reviewed_memory = (reviewed_memory + [memory_event])[-3:]
                     self.manifest("RUNNING", population)
                 return self.manifest("COMPLETED", population)
             except (EvolutionError, OSError, ValueError) as error:

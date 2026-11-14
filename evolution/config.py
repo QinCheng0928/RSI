@@ -28,8 +28,6 @@ class EvaluationConfig(Model):
 
 class ExecutionConfig(Model):
     simulator: str
-    cache_enabled: bool = True
-    deterministic: bool = True
     environment: Dict[str, Any] = Field(default_factory=dict)
     # Version of the complete Python simulation: environment, dynamics, and dependencies.
     simulator_version: str = "TODO"

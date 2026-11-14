@@ -11,7 +11,7 @@ from evolution.storage import Store
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generation → testing (execution/caching) → evaluation (selection)")
+    parser = argparse.ArgumentParser(description="Generation → testing (execution) → evaluation (selection)")
     parser.add_argument("command", choices=["prepare", "generate", "build-suite", "run"])
     parser.add_argument("--problem", default="port_route_planning", help="Problem directory name under problems/")
     parser.add_argument("--run-id", default=None, help="Reuse the same ID to resume from the last committed generation")

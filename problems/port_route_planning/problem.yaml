@@ -24,8 +24,6 @@ execution:
   harness_hash: TODO
   observation_schema_version: v1
   external_inputs_hash: none
-  deterministic: true
-  cache_enabled: true
   infra_retries: 1
   timeout_seconds: 30
   memory_mb: 512

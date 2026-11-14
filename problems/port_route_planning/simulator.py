@@ -15,7 +15,6 @@ from evolution.models import Scenario, SimulatorResult
 
 class PendingSimulator:
     sandboxed = False
-    deterministic = False
 
     def check_readiness(self, config: ExecutionConfig) -> None:
         raise SimulatorNotConfigured(

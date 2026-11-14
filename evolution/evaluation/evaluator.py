@@ -38,6 +38,7 @@ class Evaluator:
                 raise ContractError("comparison prohibited: unequal environment/configuration fingerprints")
             for scenario, used in zip(suite.scenarios, uses):
                 if (used.individual_id != individual.individual_id
+                        or used.record.individual_id != individual.individual_id
                         or used.record.execution_key.code_hash != individual.code_hash
                         or used.record.execution_key.scenario_content_hash != scenario.content_hash):
                     raise ContractError("execution record identity/scenario order mismatch")

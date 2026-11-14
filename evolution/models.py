@@ -125,14 +125,12 @@ class ExecutionRecord(Model):
 class RunUse(Model):
     individual_id: str
     record: ExecutionRecord
-    cache_hit: bool
     record_ref: str
 
 
 class Coverage(Model):
     individual_id: str
     required_execution_keys: List[str]
-    cached_keys: List[str]
     executed_keys: List[str]
     generation_error_keys: List[str]
     missing_keys: List[str]

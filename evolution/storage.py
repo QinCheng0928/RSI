@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Dict
 
-from pydantic import ValidationError
-
 from evolution.errors import ContractError
 from evolution.models import Individual, Population, canonical, digest
 
@@ -149,15 +147,3 @@ class Store:
         ref = str(paths[-1].relative_to(self.root))
         self.pointer("populations/population_current.json", {"manifest_ref": ref, "hash": digest(population)})
         return population
-
-    def cached(self, key: str) -> Optional[dict]:
-        ref = f"execution_cache/{key}.json"
-        if not self.path(ref).exists():
-            return None
-        try:
-            pointer = self.read(ref)
-            data = self.verified_object(pointer["record_ref"])
-            return {"record_ref": pointer["record_ref"], "data": data}
-        except (OSError, ValueError, KeyError, ContractError, ValidationError) as error:
-            self.event("CACHE_INVALIDATED", {"key": key, "reason": str(error)})
-            return None

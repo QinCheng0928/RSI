@@ -418,7 +418,6 @@ def simulator_lock(config):
 
 class ProjectAirSimSimulator:
     sandboxed = True
-    deterministic = False
 
     def __init__(self):
         self._batch_active = False
@@ -451,8 +450,6 @@ class ProjectAirSimSimulator:
                     self._batch_active = False
 
     def check_readiness(self, config: ExecutionConfig):
-        if config.deterministic or config.cache_enabled:
-            raise InfrastructureError("live UE/ProjectAirSim flights require deterministic=false and cache_enabled=false")
         if config.simulator_version != SIMULATOR_VERSION or config.harness_hash != harness_hash():
             raise InfrastructureError("UAV simulator version/harness fingerprint mismatch")
         if config.observation_schema_version != "uav-ned-v1":

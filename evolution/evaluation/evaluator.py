@@ -10,7 +10,7 @@ from evolution.framework import ProblemSpec
 from evolution.llm import LLM
 from evolution.models import (AnalystOutput, ArbiterOutput, Assessment, Diagnosis, Individual,
     PairJudgment, PreferenceOutput, ReviewOutput, RunUse, ScenarioSuite, SemanticRelations, Status, digest)
-from evolution.storage import Store
+from evolution.storage import Store, TRACE_FORMAT
 
 
 class Evaluator:
@@ -82,13 +82,9 @@ class Evaluator:
 
     def analyze(self, alias: str, uses: List[RunUse], suite: ScenarioSuite, base: str) -> Tuple[dict, List[dict]]:
         m = self.cfg.evaluation.anomaly_analyst_count
-        trace = [{"scenario_id": scenario.scenario_id,
-                  "decisions": used.record.result.decisions, "trajectories": used.record.result.trajectories,
-                  "context": used.record.result.context,
-                  "evidence": [e.model_dump() for e in used.record.evidence]}
-                 for scenario, used in zip(suite.scenarios, uses)]
+        trace = [self.store.execution_trace(used.record_ref) for used in uses]
         shared = {"task": self.cfg.task.model_dump(), "rubric": self.cfg.rubric.model_dump(),
-            "suite": suite.model_dump(), "individual_alias": alias, "trace": trace,
+            "suite": suite.model_dump(), "individual_alias": alias, "trace": trace, "trace_format": TRACE_FORMAT,
             "deterministic_correctness_pass": True}
         focuses = ["temporal stability", "interaction and safety", "task behavior and tradeoffs"]
         names = self.cfg.agents.analysts
@@ -132,7 +128,7 @@ class Evaluator:
             "semantic": semantic.model_dump(), "statistical_independence_claimed": False}
         self.store.save(base + "/independence_report.json", independence)
         reviews = []
-        all_evidence = [e.model_dump() for u in uses for e in u.record.evidence]
+        all_evidence = [e.evidence_id for u in uses for e in u.record.evidence]
         for index in range(m):
             others = [c for c in claim_order if owners[c["claim_id"]] != index]
             output = self.llm.ask(names[index % len(names)],
@@ -140,19 +136,18 @@ class Evaluator:
                 "Complementary evidence is highlighted; all hard constraints and necessary context are available. "
                 "Do not invent observations. Original first passes are immutable.",
                 {**shared, "anonymous_claims": others,
-                 "highlighted_evidence": all_evidence[index::m]}, ReviewOutput,
+                 "highlighted_evidence_refs": all_evidence[index::m]}, ReviewOutput,
                 f"{base}/cross_reviews/session_{index:02d}")
             reviews.append(output.model_dump())
             self.store.save(f"{base}/cross_reviews/session_{index:02d}.json", output)
         # Re-read immutable raw objects and verify provenance before building packets.
         evidence_index = {}
         for scenario, used in zip(suite.scenarios, uses):
-            raw = self.store.verified_object(used.record_ref)
+            raw = self.store.load_execution(used.record_ref)
             if digest(raw) != digest(used.record):
                 raise ContractError("raw execution record changed during evidence retrieval")
             for evidence in used.record.evidence:
-                evidence_index[evidence.evidence_id] = {"evidence": evidence.model_dump(),
-                    "run_id": used.record.run_id, "individual_alias": alias,
+                evidence_index[evidence.evidence_id] = {"run_id": used.record.run_id, "individual_alias": alias,
                     "scenario_id": scenario.scenario_id, "record_ref": used.record_ref}
         packets = []
         for claim in claim_order:
@@ -160,12 +155,13 @@ class Evaluator:
                      and evidence_index[ref]["scenario_id"] == claim["scenario_id"]]
             packets.append({"claim_id": claim["claim_id"], "requested_refs": claim["evidence_refs"],
                 "provenance_status": "VERIFIED" if valid and len(valid) == len(claim["evidence_refs"]) else "UNVERIFIED",
-                "records": [evidence_index[ref] for ref in valid],
+                "records": [{"evidence_id": ref, **evidence_index[ref]} for ref in valid],
                 "checker_results": "Existence and provenance verified; semantic support remains for arbiter review."})
         self.store.save(base + "/evidence_packets.json", packets)
         # Internal provenance (run IDs, record paths) stays out of anonymous judging prompts.
-        anonymous_packets = [{**p, "records": [{"evidence": r["evidence"], "scenario_id": r["scenario_id"]}
-                            for r in p["records"]]} for p in packets]
+        anonymous_packets = [{**{key: value for key, value in p.items() if key != "records"},
+                              "evidence_refs": [record["evidence_id"] for record in p["records"]]}
+                             for p in packets]
         verdicts = self.llm.ask(self.cfg.agents.arbiter,
             "You are the single anomaly arbiter. Decide every claim exactly once using verified evidence, "
             "counterarguments and frozen rubric. UNVERIFIED evidence cannot confirm a claim. "
@@ -215,7 +211,9 @@ class Evaluator:
                     "Consider strengths, correctness, confirmed anomalies and tradeoffs, not anomaly counts. "
                     "Cite evidence for a strict preference. Do not assume a total order.",
                     {"task": self.cfg.task.model_dump(), "rubric": self.cfg.rubric.model_dump(),
-                     "suite": suite.model_dump(), "A": profiles[a], "B": profiles[b]},
+                     "suite": suite.model_dump(), "trace_format": TRACE_FORMAT,
+                     "A": {key: value for key, value in profiles[a].items() if key != "evidence_refs"},
+                     "B": {key: value for key, value in profiles[b].items() if key != "evidence_refs"}},
                     PreferenceOutput, location)
                 ref = self.store.save(location + "/judgment.json", result)
                 refs.append(ref)

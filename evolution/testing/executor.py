@@ -99,7 +99,7 @@ class Executor:
                     evidence=self.evidence(result, scenario, run_id),
                     stdout_ref=self.store.object({"text": result.stdout}),
                     stderr_ref=self.store.object({"text": result.stderr}))
-                record_ref = self.store.object(record)
+                record_ref = self.store.save_execution(record)
                 uses.append(RunUse(individual_id=individual.individual_id, record=record, record_ref=record_ref))
                 if individual.generation_errors:
                     generation_error_keys.append(key.key)
@@ -109,7 +109,9 @@ class Executor:
             coverage.append(Coverage(individual_id=individual.individual_id, required_execution_keys=required,
                 executed_keys=executed_keys, generation_error_keys=generation_error_keys,
                 missing_keys=[], environment_failures=environment_failures))
-        self.store.save(prefix + "/testing/execution_uses.json", {k: [u.model_dump(mode="json") for u in v] for k, v in output.items()})
+        self.store.save(prefix + "/testing/execution_uses.json", {
+            key: [{"individual_id": used.individual_id, "record_ref": used.record_ref} for used in uses]
+            for key, uses in output.items()})
         self.store.save(prefix + "/testing/coverage_report.json", {
             "coverage": [c.model_dump() for c in coverage], "real_simulator_calls": real_calls})
         return output

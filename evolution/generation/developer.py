@@ -11,7 +11,7 @@ from evolution.config import ProblemConfig
 from evolution.errors import ContractError
 from evolution.llm import LLM
 from evolution.models import Assessment, CodeProposal, Individual, StrategyPlan, digest
-from evolution.storage import Store, is_within
+from evolution.storage import Store, TRACE_FORMAT, is_within
 
 
 class Developer:
@@ -92,6 +92,7 @@ class Developer:
                     "CROSSOVER and MUTATION act only on parents assessed as not needing repair. "
                     "Return complete files. This candidate will be tested and evaluated without regeneration.",
                     {"task": cfg.task.model_dump(), "template": self.template, "operator": operator,
+                     "trace_format": TRACE_FORMAT,
                      "strategy": strategy, "parents": parent_inputs, "feedback": feedback,
                      "seed": rng.randrange(2**31)}, CodeProposal, location)
                 output = proposal.model_dump()
@@ -113,10 +114,13 @@ class Developer:
                 errors.append(str(error))
                 output = {"error": str(error), "raw_responses": [self.store.read(str(path.relative_to(self.store.root)))
                     for path in sorted(self.store.path(location).rglob("response.json"))]}
-            output_ref = self.store.save(location + "/output.json", output)
             code_hash = digest(files)
             individual_id = "alg_" + digest({"prefix": prefix, "slot": slot, "code_hash": code_hash})
             base = "individuals/" + individual_id
+            if not errors:
+                output = {key: value for key, value in output.items() if key != "files"}
+                output["source_ref"] = base + "/source_manifest.json"
+            output_ref = self.store.save(location + "/output.json", output)
             individual = Individual(individual_id=individual_id, code_hash=code_hash, artifact_ref=base + "/code",
                 generation_born=generation, parent_ids=[a.individual.individual_id for a in chosen],
                 operator=operator, strategy_tag=tag, lineage_ref=base + "/lineage.json", generation_errors=errors)

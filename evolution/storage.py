@@ -8,7 +8,36 @@ from pathlib import Path
 from typing import Any, Optional, Dict
 
 from evolution.errors import ContractError
-from evolution.models import Individual, Population, canonical, digest
+from evolution.models import ExecutionRecord, Individual, Population, canonical, digest
+
+
+TRACE_FORMAT = (
+    "Tables use columns and rows; each row follows the listed column order. "
+    "Every sample and its numeric precision are retained. Evidence source names decisions or trajectories; "
+    "row is a zero-based sample index in that table or list. Evidence step is an evidence ordinal, "
+    "not a control step; use the referenced sample's episode, step and time for temporal reasoning. "
+    "The evidence table shares scenario_hash; context_rows identifies evidence rows that also include "
+    "the result context. Cite original evidence_id values. Evidence references in highlights and "
+    "verified packets refer to data already supplied in trace."
+)
+
+
+def _table(records: Any) -> Any:
+    if not records or not isinstance(records[0], dict):
+        return records
+    columns = list(records[0])
+    if any(not isinstance(row, dict) or set(row) != set(columns) for row in records):
+        return records
+    return {"columns": columns, "rows": [[row[column] for column in columns] for row in records]}
+
+
+def _records(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    columns, rows = value["columns"], value["rows"]
+    if len(columns) != len(set(columns)) or any(len(row) != len(columns) for row in rows):
+        raise ContractError("invalid stored table")
+    return [dict(zip(columns, row)) for row in rows]
 
 
 def artifact_id() -> str:
@@ -83,6 +112,62 @@ class Store:
         if self.path(ref).stem != digest(data):
             raise ContractError("object hash mismatch: " + ref)
         return data
+
+    def save_execution(self, record: ExecutionRecord) -> str:
+        data = record.model_dump(mode="json")
+        result = data["result"]
+        sources = {"decision": "decisions", "trajectory": "trajectories"}
+        offsets = {kind: 0 for kind in sources}
+        rows, context_rows = [], []
+        for index, evidence in enumerate(record.evidence):
+            observation = evidence.observation
+            kind = observation.get("kind")
+            if kind not in sources or evidence.scenario_hash != record.execution_key.scenario_content_hash:
+                break
+            source, row = sources[kind], offsets[kind]
+            samples = result[source]
+            expected = {"kind": kind, "data": samples[row]} if row < len(samples) else {}
+            if "context" in observation:
+                expected["context"] = result["context"]
+                context_rows.append(index)
+            if canonical(observation) != canonical(expected):
+                break
+            rows.append({"evidence_id": evidence.evidence_id, "step": evidence.step, "source": source, "row": row})
+            offsets[kind] += 1
+        else:
+            if rows:
+                data["evidence"] = {**_table(rows), "scenario_hash": record.execution_key.scenario_content_hash,
+                                    "context_rows": context_rows}
+        for field in ("decisions", "trajectories"):
+            result[field] = _table(result[field])
+        return self.object(data)
+
+    def load_execution(self, ref: str) -> ExecutionRecord:
+        data = self.verified_object(ref)
+        result = data["result"]
+        for field in ("decisions", "trajectories"):
+            result[field] = _records(result[field])
+        table = data["evidence"]
+        if isinstance(table, dict):
+            evidence = []
+            kinds = {"decisions": "decision", "trajectories": "trajectory"}
+            for index, row in enumerate(_records(table)):
+                source, position = row["source"], row["row"]
+                if source not in kinds or not isinstance(position, int) or not 0 <= position < len(result[source]):
+                    raise ContractError("invalid stored evidence reference")
+                observation = {"kind": kinds[source], "data": result[source][position]}
+                if index in table["context_rows"]:
+                    observation["context"] = result["context"]
+                evidence.append({"evidence_id": row["evidence_id"], "scenario_hash": table["scenario_hash"],
+                                 "step": row["step"], "observation": observation})
+            data["evidence"] = evidence
+        return ExecutionRecord.model_validate(data)
+
+    def execution_trace(self, ref: str) -> dict:
+        data = self.verified_object(ref)
+        return {"scenario_id": data["scenario_id"],
+                **{field: data["result"][field] for field in ("decisions", "trajectories", "context")},
+                "evidence": data["evidence"]}
 
     def attempt(self, generation: int) -> str:
         return f"generations/gen_{generation:04d}/attempts/{artifact_id()}"

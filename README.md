@@ -1,19 +1,14 @@
 # Population-Based Algorithm Evolution
 
-English | [简体中文](docs/README.zh-CN.md)
+<p align="center">
+  <strong>English</strong>
+  &nbsp;·&nbsp;
+  <a href="docs/README.zh-CN.md">简体中文</a>
+</p>
 
 A research framework for generating, testing, and evolving algorithms with large language models. Models judge behavior from task descriptions and evidence collected through actual interaction; the framework manages candidate code, test scenarios, evaluation feedback, and population evolution.
 
-The project targets algorithm optimization tasks that require interaction with external environments and lack an explicit numerical fitness function. It currently includes a UAV adversarial navigation problem and a port route planning scaffold awaiting simulator integration.
-
-```mermaid
-flowchart LR
-    A[Generate candidates] --> B[Execute scenarios]
-    B --> C[Check correctness and evaluate behavior]
-    C --> D[Compare and select]
-    D --> E[Next-generation feedback]
-    E --> A
-```
+The project targets algorithm optimization tasks that require interaction with external environments and lack an explicit numerical fitness function. Each problem is a self-contained package defining the task, environment interaction, and evaluation contract.
 
 ## Features
 
@@ -22,11 +17,6 @@ flowchart LR
 - Test parents and offspring on a common scenario suite, then select using multiple analysts and pairwise comparisons.
 - Archive candidate code, model interactions, execution evidence, and evaluation records; resume from committed generations.
 - Integrate problems through shared interfaces while keeping environment interaction and candidate isolation inside each problem's simulator.
-
-| Problem | Status |
-| --- | --- |
-| [UAV adversarial navigation](problems/uav_adversarial/problem.yaml) | ProjectAirSim adapter implemented; start the UE5 environment manually |
-| [Port route planning](problems/port_route_planning/problem.yaml) | Configuration and interface scaffold; full runs abort explicitly until the simulator is connected |
 
 ## Repository layout
 
@@ -39,8 +29,7 @@ evolution/
   runner.py         # Generation orchestration and recovery
   storage.py        # Experiment artifacts and population commits
 problems/
-  uav_adversarial/   # UAV adversarial navigation
-  port_route_planning/
+  <problem_id>/     # One self-contained problem package
 requirements.txt
 ```
 
@@ -48,27 +37,15 @@ Each problem owns its `problem.yaml`, `spec.py`, `simulator.py`, and algorithm t
 
 ## Installation
 
-Run commands from the repository root. The framework uses Linux file locking. Python 3.8 is recommended for the UAV problem to match the current ProjectAirSim 0.1.1 SDK.
+Use Linux and Python 3.8 or a compatible later version. Run commands from the repository root:
 
 ```bash
-python3.8 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-UAV candidate isolation also requires `bubblewrap`, `prlimit`, and `/usr/bin/python3`. On Debian or Ubuntu:
-
-```bash
-sudo apt-get install bubblewrap util-linux
-```
-
-If the ProjectAirSim source is at `~/ProjectAirSim`, install its client in the same virtual environment. These commands install the core dependencies used by the flight adapter, bypassing full resolution of the SDK's older visualization dependencies:
-
-```bash
-python -m pip install --no-deps -e "$HOME/ProjectAirSim/client/python/projectairsim"
-python -m pip install pynng msgpack cryptography commentjson jsonschema pykml \
-  'setuptools<81' opencv-python-headless pqdict
-```
+The framework uses Linux file locking. Each problem's adapter must also provide its own environment dependencies, candidate isolation, and readiness checks; these requirements depend on the environment being integrated.
 
 ## Model configuration
 
@@ -95,11 +72,11 @@ Git ignores `.env`. Keep credentials in environment variables or the root `.env`
 
 ## Run an experiment
 
-Configure model access and start UE5 / ProjectAirSim manually, then run:
+Configure model access and the selected problem's environment first. Replace `your_problem` with an existing directory name under `problems/`:
 
 ```bash
 source .venv/bin/activate
-python -m evolution run --problem uav_adversarial --run-id uav_001
+python -m evolution run --problem your_problem --run-id experiment_001
 ```
 
 Set the experiment size in the problem configuration. This is a small example; the corresponding `problem.yaml` determines the actual settings:
@@ -127,7 +104,7 @@ Other commands accept the same `--problem` and `--run-id` arguments:
 | `python -m evolution build-suite` | Construct a scenario suite without executing candidates |
 | `python -m evolution run` | Run the complete optimization process |
 
-`generate` and `build-suite` require a working model service. The default problem is `port_route_planning`; specify `--problem uav_adversarial` for UAV experiments.
+`generate` and `build-suite` require a working model service. Pass `--problem` explicitly to select the intended problem package.
 
 Reuse the same `run-id` with unchanged configuration and source code to resume from committed generations. Use a new `run-id` after changing problem configuration, problem implementation, or framework code.
 
@@ -141,40 +118,99 @@ Selection prioritizes candidates that pass checks. If fewer than P qualify, fail
 
 The final output is a recommendation supported by the current test suite. Ties, incomparability, and preference cycles remain explicit; the framework does not guarantee a unique or globally optimal algorithm.
 
-## UAV adversarial navigation
+## Problem package structure
 
-The environment contains one tested UAV and one to four adversarial UAVs. The tested UAV uses a fixed PD+CBF navigator to reach its goal. Optimization targets one shared decision policy for all adversarial UAVs.
+Keep each problem's configuration, contracts, environment adapter, and algorithm template together:
 
-- Adversarial intensity is a scalar in `[0, 1]`. Higher intensity should cause greater delay, diversion, or departure of the tested UAV from the airspace.
-- The tested UAV may be forced outside the boundary. Adversaries must remain inside, and all UAVs must avoid collisions.
-- All initial positions must be inside the airspace, with every pair strictly more than 1 m apart.
-- Core scenarios cover one to four adversaries and matched initial conditions at intensities `0`, `0.5`, and `1`.
-- Evaluation uses the task and actual interaction evidence without importing the original adversarial project's reward functions or numerical performance metrics.
+```text
+problems/<problem_id>/
+  problem.yaml                  # Component references and experiment configuration
+  spec.py                       # Scenario validation and correctness rules
+  simulator.py                  # Environment interaction and isolated execution
+  template/
+    algorithm.py.txt            # Candidate interface and starting implementation
+  sim_config/                   # Optional environment configuration or fixed assets
+  experiments/                  # Optional YAML configuration overlays
+```
 
-Algorithms implement `solve(observation, seed)`, consume observations collected by the simulator, and return N acceleration vectors. Generated code uses only the Python standard library and runs in an isolated subprocess. See the [algorithm template](problems/uav_adversarial/template/algorithm.py.txt) for the interface.
+Only the first four files form the standard package layout. Additional modules and assets are optional and belong inside the problem directory when needed. The framework loads components from configuration rather than importing a specific environment directly.
 
-Every control step records requested and applied accelerations and the resulting flight state, with initial and terminal states retained. Behavioral analysis and candidate comparisons receive the complete step-by-step records.
+### Configuration: `problem.yaml`
 
-Connection and decision timeout settings belong in `execution.environment`:
+The configuration combines task semantics with the settings needed to run an experiment:
+
+| Section | Responsibility |
+| --- | --- |
+| `problem_id` | Sole problem identifier, also used in the run storage path |
+| `spec` | Import reference for a `ProblemSpec` instance, such as `problems.your_problem.spec:SPEC` |
+| `template` | Algorithm template path relative to the problem directory |
+| `storage_root` | Root directory for experiment artifacts |
+| `task` | Goal, inputs, outputs, hard constraints, and allowed code changes |
+| `scenario_space` | Scenario types, parameter ranges, and validity rules |
+| `core_scenarios` | Predefined baseline cases; may be empty |
+| `rubric` | Behavioral evaluation principles and guidance for conflicting evidence |
+| `experiment` | Population size, evolution rounds, and framework random seed |
+| `genetics` | Crossover and mutation probabilities and elite count |
+| `evaluation` | Number of independent initial analysts |
+| `models` / `agents` | Model profiles and their role assignments |
+| `execution` | Simulator reference, versions, resource limits, retries, and environment settings |
+
+`task.goal` describes the intended behavior. `task.inputs` and `task.outputs` define the algorithm's observation and action contracts. `task.hard_constraints` specifies mandatory rules, while `task.allowed_changes` restricts the generated files. There is no separate task identifier.
+
+`execution.environment` contains adapter-specific settings; per-scenario variation belongs in `Scenario.inputs`. `simulator_version`, `harness_hash`, `observation_schema_version`, and `external_inputs_hash` identify the execution conditions. The adapter verifies the relevant versions and fingerprints in `check_readiness()`.
+
+Optional `experiments/<name>.yaml` files override base configuration with `--experiment <name>`. Dictionaries merge recursively; lists replace the corresponding base lists.
+
+### Scenarios and correctness: `spec.py`
+
+A scenario contains a label, problem-specific inputs, a seed, and a purpose:
 
 ```yaml
-address: 127.0.0.1
-port_topics: 8989
-port_services: 8990
-decision_timeout_seconds: 1.0
+scenario_id: baseline_001
+inputs:
+  case: baseline
+seed: 42
+purpose: Baseline coverage
 ```
 
-All candidates, scenarios, and intensities in a generation's testing batch share one connection. Each intensity flight reloads and initializes the scene. When testing completes or aborts, the adapter disconnects and cleans up local resources without landing. The next generation reconnects and reloads the scene. Disconnecting alone does not reset or stop the UE scene.
+The `inputs` above are illustrative; each problem defines and validates its own schema. The scenario content hash depends on inputs and seed. Labels and purposes are annotations.
 
-The framework treats UE5/ProjectAirSim as a nondeterministic external simulator. Small differences in vehicle state, physics updates, and asynchronous communication timing can produce different trajectories even when source code, scenario inputs, and random seed are unchanged. The framework seed does not guarantee reproducibility of the complete external simulation.
+Implement the [ProblemSpec interface](evolution/framework.py):
 
-Parents and offspring are therefore rerun on the common scenario suite in every generation. Behavioral analysis and comparison use the current execution evidence rather than treating a historical trajectory as a new execution result.
+| Method | Responsibility |
+| --- | --- |
+| `validate_scenario(scenario)` | Reject invalid inputs, unsupported parameters, and impossible initial conditions |
+| `check_correctness(scenario, result)` | Check execution evidence against mandatory domain constraints and return `Correctness` |
+| `sanitize_feedback(confirmed)` | Expose only scenario identifiers and behavioral symptoms to subsequent scenario generation |
 
-After changing the UAV simulator, constraints, template, or simulation configuration, update `execution.harness_hash` and use a new `run-id`:
+Correctness checks establish whether a candidate satisfies mandatory requirements. Behavioral evaluation judges how well an eligible candidate achieves the goal. The two responsibilities remain separate.
 
-```bash
-python -c 'from problems.uav_adversarial.simulator import harness_hash; print(harness_hash())'
-```
+The tester combines predefined, historical, regression, and newly proposed scenarios. Matching inputs and seeds are deduplicated; reusing a scenario ID with different contents is rejected. Parents and offspring use the same current suite.
+
+### Environment and execution: `simulator.py`
+
+Implement the [Simulator interface](evolution/framework.py):
+
+| Member | Responsibility |
+| --- | --- |
+| `sandboxed` | Declare whether the adapter provides actual candidate execution isolation |
+| `check_readiness(config)` | Check environment availability, dependencies, versions, fingerprints, and isolation prerequisites |
+| `run(code_directory, scenario, config)` | Execute one candidate in one scenario and return a `SimulatorResult` with actual observations and errors |
+| `testing_batch(config)` | Optional context manager for resources shared across a generation's entire testing batch |
+
+The adapter loads the generated algorithm inside its execution boundary, collects observations, calls the decision function, applies actions, and records behavior. For step-based environments, record the required observation–action–result sequence at each step, including initial and terminal states. Resource limits and dependencies must be enforced by the actual execution environment.
+
+`SimulatorResult` contains execution status, decisions, trajectories, context, standard output, standard error, and an optional failure category. Return algorithm failures as `INVALID` or raise `AlgorithmExecutionError`; use `InfrastructureError` for environment or service failures. The adapter must not repair or regenerate candidates during execution.
+
+The executor traverses candidates and scenarios, manages infrastructure retries, archives records, and checks coverage. Each `executor.run()` covers one generation's testing batch. If `testing_batch()` exists, its context wraps the entire batch and cleans up on normal completion or exceptional exit. The adapter decides whether to reuse or recreate resources within that scope.
+
+External environments may be nondeterministic: state differences, update timing, and asynchronous communication can change observed behavior even with identical code, scenario inputs, and seed. The framework therefore reruns parents and offspring on the current common suite in every generation. Evaluation uses the current execution evidence instead of reusing historical trajectories as new results.
+
+### Candidate contract: `template/algorithm.py.txt`
+
+The template defines the synchronous `solve(observation, seed)` entry point, expected observation fields, action schema, available dependencies, and any restrictions. It can provide an initial implementation that generation operators may replace.
+
+The simulator collects observations outside the candidate and supplies them as arguments. Generated files are restricted by `task.allowed_changes`, including the required `algorithm.py`. Environment setup, correctness checks, and evaluator internals stay outside generated code.
 
 ## Inspect results
 
@@ -195,19 +231,4 @@ experiment_manifest.json   # Overall status, progress, eligible IDs, abort reaso
 
 Model requests and responses, failure diagnoses, test trajectories, and comparisons are archived in the experiment directory. `COMPLETED` means that the process finished, not that a usable algorithm was found. If no final candidate qualifies, `final/best.json` records `NO_VALID_CANDIDATE` and no recommendation code is exported.
 
-## Add a problem
-
-Provide these files under `problems/<problem_id>/` and configure their component references in `problem.yaml`:
-
-| File | Responsibility |
-| --- | --- |
-| `problem.yaml` | Task, model roles, experiment settings, scenario space, and evaluation principles |
-| `spec.py` | Scenario validation, correctness checks, and feedback sanitization |
-| `simulator.py` | Environment interaction, candidate isolation, state collection, and evidence recording |
-| `template/algorithm.py.txt` | Algorithm entry point, input/output contract, and starting implementation |
-
-Implement the [Simulator interface](evolution/framework.py): `check_readiness(config)`, `run(code_directory, scenario, config)`, and the `sandboxed` attribute. The executor executes every candidate/scenario combination and saves its record; environment-specific control stays inside the problem directory.
-
-Adapters that reuse resources within a generation may provide an optional `testing_batch(config)` context manager. The executor wraps the generation's tests in that context, triggering cleanup on both normal completion and exceptional exit. Adapters without it retain per-call execution behavior.
-
-The framework's module organization draws on [LACE](https://github.com/PJ-NTU/LACE). UAV model configuration and some navigation and initialization conventions originate from ACIAT-UAV; its training code is not a runtime dependency.
+The framework's module organization draws on [LACE](https://github.com/PJ-NTU/LACE).

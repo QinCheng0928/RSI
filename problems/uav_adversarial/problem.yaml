@@ -4,14 +4,14 @@ template: template/algorithm.py.txt
 storage_root: runtime_data
 
 experiment:
-  population_size: 2 # 10
-  generations: 2 # 8
+  population_size: 10 # 10
+  generations: 8 # 8
   seed: 42
 
 genetics:
   crossover_probability: 0.5
   mutation_probability: 0.5
-  elite_count: 1 # 2
+  elite_count: 2 # 2
 
 evaluation:
   anomaly_analyst_count: 3

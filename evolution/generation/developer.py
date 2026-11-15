@@ -74,15 +74,33 @@ class Developer:
                 operator, strategy = "INITIAL", strategies[slot]
                 assignment = "initialization"
             location = f"{prefix}/generation/slot_{slot:03d}"
+            trace_format, request_feedback = TRACE_FORMAT, feedback
+            if operator == "REPAIR":
+                trace_format = (
+                    "Tables use columns and rows; each row follows the listed column order. "
+                    "All decision and trajectory samples and numeric precision are retained. "
+                    "Repair inputs omit evidence indexes and execution audit fields. Describe observations "
+                    "by scenario_id, seed, episode, intensity and control step; evidence IDs are not required."
+                )
+                request_feedback = {**feedback, "behavior_feedback": {
+                    key: {**profile, "trace": [
+                        {field: value for field, value in trace.items() if field != "evidence"}
+                        for trace in profile["trace"]]}
+                    for key, profile in feedback.get("behavior_feedback", {}).items()}}
             parent_inputs = []
             for assessment in chosen:
                 parent = assessment.individual
                 lineage = self.store.read(parent.lineage_ref)
+                failure_records = {}
+                for ref in assessment.diagnosis.failure_refs if assessment.diagnosis else []:
+                    record = self.store.read(ref)
+                    failure_records[ref] = ({"scenario_id": record["scenario_id"],
+                        "seed": record["execution_key"]["seed"], "result": record["result"]}
+                        if operator == "REPAIR" else record)
                 parent_inputs.append({"individual": parent.model_dump(), "needs_repair": assessment.needs_repair,
                     "files": self.store.source(parent),
                     "diagnosis": assessment.diagnosis.model_dump() if assessment.diagnosis else None,
-                    "failure_records": {ref: self.store.read(ref) for ref in
-                        (assessment.diagnosis.failure_refs if assessment.diagnosis else [])},
+                    "failure_records": failure_records,
                     "generation_output": self.store.read(lineage["output_ref"])})
             files, errors, rationale, tag = {}, [], "", strategy
             try:
@@ -92,8 +110,8 @@ class Developer:
                     "CROSSOVER and MUTATION act only on parents assessed as not needing repair. "
                     "Return complete files. This candidate will be tested and evaluated without regeneration.",
                     {"task": cfg.task.model_dump(), "template": self.template, "operator": operator,
-                     "trace_format": TRACE_FORMAT,
-                     "strategy": strategy, "parents": parent_inputs, "feedback": feedback,
+                     "trace_format": trace_format,
+                     "strategy": strategy, "parents": parent_inputs, "feedback": request_feedback,
                      "seed": rng.randrange(2**31)}, CodeProposal, location)
                 output = proposal.model_dump()
                 rationale, tag = proposal.rationale, proposal.strategy_tag

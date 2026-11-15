@@ -3,7 +3,7 @@ from __future__ import annotations
 import fcntl
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 from evolution.config import ProblemConfig, config_fingerprint, load_symbol
 from evolution.errors import ContractError, EvolutionError
@@ -11,7 +11,7 @@ from evolution.evaluation import Evaluator, Selector
 from evolution.framework import ProblemSpec, Simulator
 from evolution.generation import Developer
 from evolution.llm import LLM, OpenAIClient
-from evolution.models import Assessment, Individual, Population, Scenario, ScenarioSuite, Status
+from evolution.models import Individual, Population, Scenario, Status
 from evolution.storage import Store, atomic_text, is_within
 from evolution.testing import Executor, Tester
 
@@ -138,33 +138,13 @@ class Evolution:
         report = self.store.read(population.selection_report_ref)
         return self.store.read(report["runtime_state_ref"])
 
-    def offspring(self, generation: int, parents: List[Assessment], prefix: str, feedback: dict) -> List[Individual]:
-        # Recover a complete stage after interruption without making new candidates
-        # or retrying an algorithm inside the same generation.
-        directory = self.store.path(f"generations/gen_{generation:04d}/attempts")
-        manifests = sorted(directory.glob("*/generation/offspring_manifest.json"))
-        if manifests:
-            path = manifests[-1]
-            manifest = self.store.read(str(path.relative_to(self.store.root)))
-            ids = manifest["produced_ids"]
-            if len(ids) == self.cfg.experiment.population_size:
-                parent_ids = {a.individual.individual_id for a in parents}
-                individuals = [Individual.model_validate(self.store.read(f"individuals/{key}/metadata.json")) for key in ids]
-                for individual in individuals:
-                    if individual.generation_born != generation or not set(individual.parent_ids) <= parent_ids:
-                        raise ContractError("interrupted offspring stage has inconsistent lineage")
-                    self.store.source(individual)
-                self.store.save(prefix + "/generation/offspring_manifest.json", {
-                    **manifest, "reused_from": str(path.relative_to(self.store.root))})
-                return individuals
-        return self.developer.generate(generation, parents, prefix, feedback)
-
     def run(self) -> dict:
         with run_lock(self.store):
             self.prepare()
             population = self.store.load_population(self.cfg.experiment.population_size)
             if population and population.config_hash != self.fingerprint:
                 raise ContractError("population configuration differs from frozen run")
+            self.store.discard_uncommitted(population.generation if population else -1)
             reviewed_memory = []
             for path in sorted(self.store.path("populations").glob("gen_*.json"))[-3:]:
                 committed = self.store.read(str(path.relative_to(self.store.root)))
@@ -190,7 +170,7 @@ class Evolution:
                                 "confirmed_anomalies": [a for a in profile["anomalies"] if a["status"] == "CONFIRMED"],
                                 "strengths": profile["strengths"], "tradeoffs": profile["tradeoffs"],
                                 "trace": profile["trace"]}
-                    offspring = self.offspring(generation, parents, prefix, developer_feedback)
+                    offspring = self.developer.generate(generation, parents, prefix, developer_feedback)
                     pool = [a.individual for a in parents] + offspring
                     if len(pool) > 2 * self.cfg.experiment.population_size or len({i.individual_id for i in pool}) != len(pool):
                         raise ContractError("pool must contain at most 2P distinct candidate IDs")
@@ -201,17 +181,8 @@ class Evolution:
                     # retained too, preserving comparable historical coverage across generations.
                     regression_ids = {f["scenario_id"] for f in previous["feedback"]}
                     regression = [s for s in old if s.scenario_id in regression_ids]
-                    existing_suites = sorted(self.store.path(f"generations/gen_{generation:04d}/attempts").glob("*/testing/suite.json"))
-                    if existing_suites:
-                        previous_suite_ref = str(existing_suites[-1].relative_to(self.store.root))
-                        suite = ScenarioSuite.model_validate(self.store.read(previous_suite_ref))
-                        for scenario in suite.scenarios:
-                            self.spec.validate_scenario(scenario)
-                        self.store.save(prefix + "/testing/suite.json", suite)
-                        self.store.save(prefix + "/testing/reused_suite.json", {"suite_ref": previous_suite_ref})
-                    else:
-                        suite = self.tester.build(generation, core, old, regression,
-                            previous["coverage"], previous["feedback"], prefix)
+                    suite = self.tester.build(generation, core, old, regression,
+                        previous["coverage"], previous["feedback"], prefix)
                     execution = self.executor.run(pool, suite, prefix)
                     assessments, comparisons, feedback = self.evaluator.evaluate(pool, execution, suite, prefix)
                     selected, report = self.selector.select(generation, assessments, comparisons, bootstrap=generation == 0)

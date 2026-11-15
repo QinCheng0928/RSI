@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -171,6 +173,62 @@ class Store:
 
     def attempt(self, generation: int) -> str:
         return f"generations/gen_{generation:04d}/attempts/{artifact_id()}"
+
+    def discard_uncommitted(self, generation: int) -> None:
+        pending = [path for path in self.path("generations").glob("gen_*")
+                   if path.is_dir() and path.name[4:].isdigit() and int(path.name[4:]) > generation]
+        slots = [(str(path.parent.parent.relative_to(self.root)), int(path.name[5:]))
+                 for directory in pending for path in directory.glob("attempts/*/generation/slot_*")
+                 if path.is_dir() and path.name[5:].isdigit()]
+        pending_ids = set()
+        for prefix, slot in slots:
+            ref = f"{prefix}/generation/slot_{slot:03d}/output.json"
+            if self.path(ref).exists():
+                source_ref = self.read(ref).get("source_ref", "")
+                if re.fullmatch(r"individuals/alg_[0-9a-f]{64}/source_manifest\.json", source_ref):
+                    pending_ids.add(source_ref.split("/")[1])
+        for path in self.path("individuals").glob("alg_*"):
+            if not path.is_dir():
+                continue
+            metadata, lineage = path / "metadata.json", path / "lineage.json"
+            if metadata.exists():
+                individual = Individual.model_validate(self.read(str(metadata.relative_to(self.root))))
+                if individual.generation_born <= generation:
+                    continue
+                if lineage.exists() and not self.read(str(lineage.relative_to(self.root))).get(
+                        "output_ref", "").startswith("generations/"):
+                    continue
+            elif path.name in pending_ids:
+                pass
+            elif (path / "source_manifest.json").exists():
+                files = self.read(str((path / "source_manifest.json").relative_to(self.root)))
+                code_hash = digest(files)
+                if not any(path.name == "alg_" + digest({"prefix": prefix, "slot": slot, "code_hash": code_hash})
+                           for prefix, slot in slots):
+                    continue
+            else:
+                continue
+            shutil.rmtree(self.path(str(path.relative_to(self.root))))
+        for directory in pending:
+            shutil.rmtree(self.path(str(directory.relative_to(self.root))))
+
+        object_pattern = re.compile(r"objects/[0-9a-f]{64}\.json")
+        references = set()
+        for path in self.root.rglob("*.json"):
+            if path.relative_to(self.root).parts[0] != "objects":
+                references.update(object_pattern.findall(path.read_text()))
+        reachable, remaining = set(), list(references)
+        while remaining:
+            ref = remaining.pop()
+            if ref in reachable:
+                continue
+            reachable.add(ref)
+            path = self.path(ref)
+            if path.exists():
+                remaining.extend(object_pattern.findall(path.read_text()))
+        for path in self.path("objects").glob("*.json"):
+            if str(path.relative_to(self.root)) not in reachable:
+                path.unlink()
 
     def event(self, kind: str, value: Any) -> str:
         return self.save(f"events/{artifact_id()}.json", {"kind": kind, "data": value})

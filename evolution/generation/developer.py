@@ -24,6 +24,23 @@ class Developer:
             raise ContractError("template must live in the problem directory")
         self.template = template.read_text()
 
+    @staticmethod
+    def parent_feedback(chosen: List[Assessment], feedback: dict) -> dict:
+        """Keep chosen-parent feedback; omit memory without individual attribution."""
+        if not chosen:
+            return {}
+        parent_ids = {a.individual.individual_id for a in chosen}
+        memory = []
+        for event in feedback.get("reviewed_memory", []):
+            assessments = [a for a in event.get("assessments", []) if a["individual_id"] in parent_ids]
+            if assessments:
+                memory.append({**{key: event[key] for key in ("generation", "evidence_level", "limits")
+                                  if key in event}, "assessments": assessments})
+        return {"selected_assessments": [a.model_dump(mode="json") for a in chosen],
+                "reviewed_memory": memory,
+                "behavior_feedback": {key: profile for key, profile in feedback.get("behavior_feedback", {}).items()
+                                      if key in parent_ids}}
+
     def generate(self, generation: int, parents: List[Assessment], prefix: str, feedback: dict) -> List[Individual]:
         cfg, p = self.cfg, self.cfg.experiment.population_size
         rng = random.Random(cfg.experiment.seed + generation * 100003)
@@ -74,7 +91,7 @@ class Developer:
                 operator, strategy = "INITIAL", strategies[slot]
                 assignment = "initialization"
             location = f"{prefix}/generation/slot_{slot:03d}"
-            trace_format, request_feedback = TRACE_FORMAT, feedback
+            trace_format, request_feedback = TRACE_FORMAT, self.parent_feedback(chosen, feedback)
             if operator == "REPAIR":
                 trace_format = (
                     "Tables use columns and rows; each row follows the listed column order. "
@@ -82,11 +99,11 @@ class Developer:
                     "Repair inputs omit evidence indexes and execution audit fields. Describe observations "
                     "by scenario_id, seed, episode, intensity and control step; evidence IDs are not required."
                 )
-                request_feedback = {**feedback, "behavior_feedback": {
+                request_feedback = {**request_feedback, "behavior_feedback": {
                     key: {**profile, "trace": [
                         {field: value for field, value in trace.items() if field != "evidence"}
                         for trace in profile["trace"]]}
-                    for key, profile in feedback.get("behavior_feedback", {}).items()}}
+                    for key, profile in request_feedback.get("behavior_feedback", {}).items()}}
             parent_inputs = []
             for assessment in chosen:
                 parent = assessment.individual

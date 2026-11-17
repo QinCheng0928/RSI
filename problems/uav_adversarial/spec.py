@@ -11,6 +11,8 @@ from evolution.models import Correctness, Model, Scenario, SimulatorResult, Stat
 
 POS_MIN = (-5.0, -15.0, -7.0)
 POS_MAX = (20.0, -5.0, -1.0)
+SPAWN_Z_MIN = POS_MIN[2] + 2.0
+SPAWN_Z_MAX = POS_MAX[2]
 Vector = List[Union[StrictFloat, StrictInt]]
 
 
@@ -43,6 +45,9 @@ class FlightScenario(Model):
         if len(self.initial_positions) != self.num_adversaries + 1:
             raise ValueError("initial_positions must contain the tested UAV followed by N adversaries")
         validate_positions(self.initial_positions)
+        if any(not SPAWN_Z_MIN <= p[2] <= SPAWN_Z_MAX for p in self.initial_positions):
+            raise ValueError(f"spawn z must be in [{SPAWN_Z_MIN}, {SPAWN_Z_MAX}] m: "
+                             "reserve 2.0 m for upward takeoff; the maximum z boundary is unchanged")
         if not within(self.goal):
             raise ValueError("goal must be inside the flight airspace")
         if math.dist(self.goal, self.initial_positions[0]) <= 3.0:
@@ -71,9 +76,10 @@ class UAVAdversarial(ProblemSpec):
             if [e["intensity"] for e in episodes] != expected.intensities:
                 raise ValueError("missing paired intensity flights")
             for episode in episodes:
-                validate_positions(episode["initial_positions"])
                 if len(episode["initial_positions"]) != expected.num_adversaries + 1:
                     raise ValueError("wrong number of initialized UAVs")
+                if any(not within(p) for p in episode["initial_positions"]):
+                    raise ValueError("post-takeoff positions must be inside the flight airspace")
                 if not episode["complete"] or episode["checked_steps"] < 1:
                     raise ValueError("missing complete monitored flight")
                 if episode["violations"]:

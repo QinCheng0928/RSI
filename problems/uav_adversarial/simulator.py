@@ -32,7 +32,7 @@ from scipy.optimize import minimize
 from evolution.config import ExecutionConfig
 from evolution.errors import AlgorithmExecutionError, InfrastructureError
 from evolution.models import Scenario, SimulatorResult, Status
-from .spec import FlightScenario, POS_MAX, POS_MIN, validate_positions
+from .spec import FlightScenario, POS_MAX, POS_MIN, within
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -268,24 +268,6 @@ class Flight:
         tasks = await asyncio.gather(*[d.takeoff_async() for d in self.drones])
         await asyncio.gather(*tasks)
 
-    @staticmethod
-    def _spawn_positions(initial_positions):
-        # Stage near the bottom of the box to leave room for SDK takeoff;
-        # measured positions are checked afterwards, without an altitude target.
-        # Separate vertically stacked starts horizontally during this phase.
-        grid = [(x, y) for x in np.arange(POS_MIN[0] + 1, POS_MAX[0], 2)
-                for y in np.arange(POS_MIN[1] + 1, POS_MAX[1], 2)]
-        positions = []
-        for target in initial_positions:
-            choices = [tuple(target[:2]), *grid]
-            valid = [p for p in choices if all(math.dist(p, q[:2]) > 1 for q in positions)]
-            if not valid:
-                raise InfrastructureError("no separated takeoff positions available")
-            x, y = min(valid, key=lambda p: math.dist(p, target[:2]))
-            positions.append([float(x), float(y), POS_MAX[2]])
-        validate_positions(positions)
-        return positions
-
     def reset(self, scenario):
         from projectairsim import Drone, World
         if self._closed:
@@ -306,10 +288,9 @@ class Flight:
         prototype = scene["actors"][0]
         # The local SDK jitters actors named Drone*. Scenario-controlled names
         # bypass that hook without modifying the shared ProjectAirSim SDK.
-        spawn_positions = self._spawn_positions(scenario.initial_positions)
         scene["actors"] = [{**prototype, "name": f"UAV{i + 1}",
                             "origin": {"xyz": " ".join(map(str, position)), "rpy": "0 0 0"}}
-                           for i, position in enumerate(spawn_positions)]
+                           for i, position in enumerate(scenario.initial_positions)]
         (directory / "scene.jsonc").write_text(json.dumps(scene))
         self.world = World(self.client, "scene.jsonc", delay_after_load_sec=2, sim_config_path=str(directory))
         self.drones = [Drone(self.client, self.world, actor["name"]) for actor in scene["actors"]]
@@ -318,19 +299,6 @@ class Flight:
             drone.arm()
         self._run_async(self._takeoff())
         self.world.pause()
-        try:
-            validate_positions(self.observe()[:, :3].tolist())
-        except ValueError as error:
-            raise InfrastructureError("invalid post-takeoff positions: " + str(error)) from error
-        # Reset measured kinematics after takeoff, so every paired flight starts
-        # at the requested airborne position with zero velocity/acceleration.
-        for drone, position in zip(self.drones, scenario.initial_positions):
-            state = drone.get_ground_truth_kinematics()
-            state["pose"]["position"] = dict(zip("xyz", position))
-            for key in ("twist", "accels"):
-                for component in ("linear", "angular"):
-                    state[key][component] = dict.fromkeys("xyz", 0.0)
-            drone.set_ground_truth_kinematics(state)
         self.collision = [False] * len(self.drones)
         self.start_ns = self.world.get_sim_time()
         for i, drone in enumerate(self.drones):
@@ -339,10 +307,8 @@ class Flight:
                     self.collision[index] = True
             self.client.subscribe(drone.robot_info["collision_info"], on_collision)
         states = self.observe()
-        try:
-            validate_positions([s[:3].tolist() for s in states])
-        except ValueError as error:
-            raise InfrastructureError("invalid measured initialization: " + str(error)) from error
+        if any(not within(s[:3]) for s in states):
+            raise InfrastructureError("post-takeoff positions must be inside the flight airspace")
         return states
 
     def observe(self):

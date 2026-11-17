@@ -3,6 +3,8 @@
 Use Python 3.8-compatible code and standard-library imports. No simulator access, files, network,
 subprocesses or external models. All measured information is supplied here.
 One fresh worker per intensity flight; globals may hold episode-local state.
+Initial positions, velocities and accelerations are measured after takeoff;
+velocities and accelerations at step zero are not assumed to be zero.
 
 observation (NED world coordinates, SI units):
   step, time, dt, intensity (0..1), remaining_steps, num_adversaries
@@ -11,7 +13,9 @@ observation (NED world coordinates, SI units):
   goal: [3]
   airspace: {min: [3], max: [3]}
   limits: {max_speed, max_acceleration, min_separation, goal_tolerance}
-    min_separation is an initialization requirement; flight collisions use simulator events.
+    min_separation applies only to configured spawn positions before takeoff,
+    using three-dimensional distance; it is not rechecked after takeoff.
+    Flight collisions use simulator events.
   previous_accelerations: N actually applied acceleration vectors
   history: up to five previous {step, tested, adversaries} observations
 

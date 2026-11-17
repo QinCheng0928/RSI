@@ -19,7 +19,7 @@ evaluation:
 execution:
   simulator: problems.uav_adversarial.simulator:ProjectAirSimSimulator
   simulator_version: projectairsim-0.1.1-fast-physics-uav-v1
-  harness_hash: 1e9efbfc2fa9fba1a77ffabda593aef945fc7fbf5a48befc7c6b6dad73785e5e
+  harness_hash: bfeb00ef949aabf1a2b15a3fd5ea4ba190be65ce3b613b45026d0c4f8c5439ba
   observation_schema_version: uav-ned-v1
   external_inputs_hash: live-ue5-projectairsim
   infra_retries: 1
@@ -60,7 +60,16 @@ task:
       limits: {max_speed: 10.0, max_acceleration: 2.0, min_separation: 1.0, goal_tolerance: 3.0}
       previous_accelerations: "N actually applied adversarial acceleration vectors"
       history: "up to five preceding {step, tested, adversaries} snapshots"
-    initialization: "min_separation applies to initialization only. Flight collisions are detected from simulator collision events."
+    initialization: >-
+      Spawn z is configurable in [-5,-1] m: minimum z is the airspace minimum
+      plus 2.0 m; maximum z is unchanged. The scenario contract reserves 2.0 m
+      for upward takeoff without modifying the robot configuration.
+      Flight starts from measured post-takeoff positions, velocities and accelerations;
+      states are not teleported or zeroed. Measured initial positions must be inside
+      the airspace. The 1 m three-dimensional separation requirement applies only to
+      configured spawn positions before takeoff, with no horizontal-distance requirement
+      or automatic repositioning. Separation is not checked again after takeoff;
+      flight collisions are detected from simulator collision events.
     runtime: "Python 3.8-compatible code and standard library only, 1 s per decision; one fresh process per intensity flight"
   outputs:
     accelerations: "Exactly N finite [ax,ay,az] vectors; each Euclidean norm <= 2 m/s²"
@@ -68,7 +77,7 @@ task:
   hard_constraints:
     - "Only modify algorithm.py; observations are acquired outside the algorithm and passed as arguments."
     - "One shared decision rule must accept arbitrary N=1..4; do not specialize by count or UAV identity."
-    - "Every initial UAV position must be within the airspace and every pair must be strictly more than 1 m apart."
+    - "Every configured spawn position must be within the airspace and every pair's three-dimensional distance must be strictly more than 1 m before takeoff. Do not require horizontal separation or recheck the 1 m distance after takeoff."
     - "No UAV, including the tested UAV, may collide. Adversaries must remain inside the airspace; forcing the tested UAV outside is an allowed observed outcome."
     - "Return the exact action schema with finite, bounded acceleration vectors."
     - "No simulator calls, network, files, subprocesses, external models, or access to evaluator internals."
@@ -79,16 +88,20 @@ scenario_space:
   types: [coverage, boundary, exploration, regression]
   parameter_ranges:
     num_adversaries: {type: integer, min: 1, max: 4}
-    initial_positions: "N+1 finite NED vectors, tested first, then adversaries; airspace inclusive"
+    initial_positions: >-
+      N+1 finite NED spawn coordinates, tested first, then adversaries.
+      All x/y/z coordinates are used directly without repositioning; spawn z must
+      be in [-5,-1] m. Actual initial flight states are measured after takeoff.
     goal: "finite NED vector inside airspace; default [15,-10,-4]"
     intensities: "2–5 strictly increasing scalars in [0,1], including 0 and 1; default [0,0.5,1]"
     max_steps: {type: integer, min: 100, max: 500, default: 500}
   validity_rules:
     - "Use only the five scenario input keys defined above; do not add evaluation scores or metrics."
-    - "initial_positions length equals num_adversaries+1; ALL UAV pairs must be strictly >1 m apart."
+    - "initial_positions length equals num_adversaries+1; all spawn pairs must have three-dimensional distance strictly >1 m. Horizontal overlap is allowed; no positions are automatically adjusted."
     - "All positions and goal are inside [-5,-15,-7]..[20,-5,-1]; tested start is >3 m from goal."
-    - "A scenario includes a paired intensity sweep with identical seed, positions, goal and horizon."
-    - "Retain core coverage of all N=1..4; explore geometry, altitude and boundary conditions."
+    - "Every spawn z must be in [-5,-1] m: the airspace minimum z plus 2.0 m, through the unchanged maximum z. This restriction applies to spawn coordinates, not measured post-takeoff states or the goal."
+    - "A scenario includes a paired intensity sweep with identical seed, takeoff layout, goal and horizon; measured post-takeoff states may vary between flights."
+    - "Retain core coverage of all N=1..4; explore geometry, spawn altitude and boundary conditions."
     - "Propose at most two new scenarios each generation; actual flights are expensive."
 
 rubric:

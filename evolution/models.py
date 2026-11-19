@@ -161,6 +161,13 @@ class AnomalyClaim(Model):
 
 class AnalystOutput(Model):
     claims: List[AnomalyClaim]
+    summary: str = Field(min_length=1, max_length=4000)
+    evidence_refs: List[str] = Field(max_length=12)
+
+
+class TraceSummary(Model):
+    summary: str = Field(min_length=1, max_length=2000)
+    evidence_refs: List[str] = Field(max_length=12)
 
 
 class ReviewOutput(Model):

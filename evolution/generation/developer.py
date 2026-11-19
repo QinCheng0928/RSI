@@ -7,10 +7,11 @@ from pydantic import Field, create_model
 from tqdm import tqdm
 
 from evolution.config import ProblemConfig
+from evolution.context import TraceContext
 from evolution.errors import ContractError
 from evolution.llm import LLM
-from evolution.models import Assessment, CodeProposal, Individual, StrategyPlan, digest
-from evolution.storage import Store, TRACE_FORMAT, is_within
+from evolution.models import Assessment, CodeProposal, Individual, RunUse, StrategyPlan, TraceSummary, digest
+from evolution.storage import Store, is_within
 
 
 class Developer:
@@ -18,6 +19,7 @@ class Developer:
 
     def __init__(self, cfg: ProblemConfig, directory: Path, llm: LLM, store: Store):
         self.cfg, self.llm, self.store = cfg, llm, store
+        self.context = TraceContext(cfg, llm, store)
         template = (directory / cfg.template).resolve()
         if not is_within(template, directory.resolve()):
             raise ContractError("template must live in the problem directory")
@@ -90,43 +92,55 @@ class Developer:
                 operator, strategy = "INITIAL", strategies[slot]
                 assignment = "initialization"
             location = f"{prefix}/generation/slot_{slot:03d}"
-            trace_format, request_feedback = TRACE_FORMAT, self.parent_feedback(chosen, feedback)
-            if operator == "REPAIR":
-                trace_format = (
-                    "Tables use columns and rows; each row follows the listed column order. "
-                    "All decision and trajectory samples and numeric precision are retained. "
-                    "Repair inputs omit evidence indexes and execution audit fields. Describe observations "
-                    "by scenario_id, seed, episode, intensity and control step; evidence IDs are not required."
-                )
-                request_feedback = {**request_feedback, "behavior_feedback": {
-                    key: {**profile, "trace": [
-                        {field: value for field, value in trace.items() if field != "evidence"}
-                        for trace in profile["trace"]]}
-                    for key, profile in request_feedback.get("behavior_feedback", {}).items()}}
+            request_feedback = self.parent_feedback(chosen, feedback)
+            for parent_id, profile in request_feedback.get("behavior_feedback", {}).items():
+                items = [{key: value for key, value in trace.items() if key != "evidence"}
+                         for trace in profile.get("trace", [])]
+                items += [{"confirmed_finding": finding} for finding in profile.get("confirmed_anomalies", [])]
+                note = self.context.summarize(cfg.agents.generator, items,
+                    {"task": cfg.task.model_dump(), "strengths": profile.get("strengths", []),
+                     "tradeoffs": profile.get("tradeoffs", [])}, location + "/feedback/" + parent_id)
+                raw = {e["evidence_id"]: e for trace in profile.get("trace", []) for e in trace.get("evidence", [])}
+                request_feedback["behavior_feedback"][parent_id] = {"summary": note,
+                    "evidence": [raw[ref] for ref in note["evidence_refs"] if ref in raw]}
             parent_inputs = []
             for assessment in chosen:
                 parent = assessment.individual
                 lineage = self.store.read(parent.lineage_ref)
-                failure_records = {}
-                for ref in assessment.diagnosis.failure_refs if assessment.diagnosis else []:
-                    record = self.store.read(ref)
-                    failure_records[ref] = ({"scenario_id": record["scenario_id"],
-                        "seed": record["execution_key"]["seed"], "result": record["result"]}
-                        if operator == "REPAIR" else record)
+                failure_records, failure_uses = [], []
+                for index, ref in enumerate(assessment.diagnosis.failure_refs if assessment.diagnosis else []):
+                    record = self.store.load_execution(ref)
+                    if record.individual_id != parent.individual_id or record.execution_key.code_hash != parent.code_hash:
+                        raise ContractError("failure record does not belong to the chosen parent")
+                    failure_uses.append(RunUse(individual_id=parent.individual_id, record=record, record_ref=ref))
+                    note = self.context.analyze(ref, cfg.agents.generator,
+                        {"task": cfg.task.model_dump(), "diagnosis": assessment.diagnosis.model_dump()},
+                        "Summarize this parent's observed failure and normal behavior for a later repair. "
+                        "Jointly compare all supplied conditions and intensities. Preserve alternative "
+                        "explanations, terminal outcomes and evidence IDs. Do not propose code yet.",
+                        f"{location}/failures/{parent.individual_id}/scenario_{index:04d}", TraceSummary)
+                    failure_records.append({"scenario_id": record.scenario_id, **note.model_dump()})
+                if failure_records:
+                    note = self.context.summarize(cfg.agents.generator, failure_records,
+                        {"task": cfg.task.model_dump()}, location + "/failures/" + parent.individual_id + "/combined")
+                    failure_records = {"summary": note,
+                        "evidence": self.context.snippets(failure_uses, note["evidence_refs"], radius=0)}
                 parent_inputs.append({"individual": parent.model_dump(), "needs_repair": assessment.needs_repair,
                     "files": self.store.source(parent),
                     "diagnosis": assessment.diagnosis.model_dump() if assessment.diagnosis else None,
                     "failure_records": failure_records,
-                    "generation_output": self.store.read(lineage["output_ref"])})
+                    "generation_output": {"strategy_tag": parent.strategy_tag,
+                        "rationale": lineage["recombination_plan"], "generation_errors": parent.generation_errors}})
             files, errors, rationale, tag = {}, [], "", strategy
             try:
-                proposal = self.llm.ask(cfg.agents.generator,
+                proposal = self.context.ask(cfg.agents.generator,
                     "Generate Python source implementing solve(observation, seed) using the assigned operator. "
                     "Use only previous-generation evaluation feedback. REPAIR fixes the assigned failed parent. "
                     "CROSSOVER and MUTATION act only on parents assessed as not needing repair. "
                     "Return complete files. This candidate will be tested and evaluated without regeneration.",
                     {"task": cfg.task.model_dump(), "template": self.template, "operator": operator,
-                     "trace_format": trace_format,
+                     "trace_format": "Behavior summaries are interpretations; evidence contains original raw excerpts. "
+                         "Full per-step records remain on disk. Do not assume uninspected intervals are safe.",
                      "strategy": strategy, "parents": parent_inputs, "feedback": request_feedback,
                      "seed": rng.randrange(2**31)}, CodeProposal, location)
                 output = proposal.model_dump()

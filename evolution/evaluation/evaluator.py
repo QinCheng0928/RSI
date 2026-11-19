@@ -2,21 +2,23 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 from tqdm import tqdm
 
 from evolution.config import ProblemConfig
+from evolution.context import TraceContext, evidence_refs
 from evolution.errors import ContractError, InfrastructureError
 from evolution.framework import ProblemSpec
 from evolution.llm import LLM
-from evolution.models import (AnalystOutput, ArbiterOutput, Assessment, Diagnosis, Individual,
+from evolution.models import (ArbiterOutput, Assessment, Diagnosis, Individual,
     PairJudgment, PreferenceOutput, ReviewOutput, RunUse, ScenarioSuite, SemanticRelations, Status, digest)
-from evolution.storage import Store, TRACE_FORMAT
+from evolution.storage import Store
 
 
 class Evaluator:
     def __init__(self, cfg: ProblemConfig, spec: ProblemSpec, llm: LLM, store: Store):
         self.cfg, self.spec, self.llm, self.store = cfg, spec, llm, store
+        self.context = TraceContext(cfg, llm, store)
 
     def evaluate(self, pool: List[Individual], execution: Dict[str, List[RunUse]],
                  suite: ScenarioSuite, prefix: str) -> Tuple[List[Assessment], List[PairJudgment], List[dict]]:
@@ -83,36 +85,53 @@ class Evaluator:
 
     def analyze(self, alias: str, uses: List[RunUse], suite: ScenarioSuite, base: str) -> Tuple[dict, List[dict]]:
         m = self.cfg.evaluation.anomaly_analyst_count
-        trace = [self.store.execution_trace(used.record_ref) for used in uses]
+        context = self.context
         shared = {"task": self.cfg.task.model_dump(), "rubric": self.cfg.rubric.model_dump(),
-            "suite": suite.model_dump(), "individual_alias": alias, "trace": trace, "trace_format": TRACE_FORMAT,
+            "suite": suite.model_dump(exclude={"scenarios"}), "individual_alias": alias,
             "deterministic_correctness_pass": True}
         focuses = ["temporal stability", "interaction and safety", "task behavior and tradeoffs"]
         names = self.cfg.agents.analysts
 
         def first_pass(index: int):
-            return self.llm.ask(names[index % len(names)],
-                "Independently identify evidence-grounded behavioral anomaly hypotheses. "
-                "No peer opinions exist in this conversation. Share all necessary facts and constraints. "
-                "An empty claims list is allowed. Cite actual evidence IDs; consider alternative explanations.",
-                {**shared, "focus": focuses[index % len(focuses)]}, AnalystOutput,
-                f"{base}/analyst_originals/session_{index:02d}")
+            role = ("Independently analyze this scenario and identify evidence-grounded anomaly hypotheses. "
+                    "Jointly compare ALL matched episodes and intensity settings in the supplied complete "
+                    "scenario observations. Compare condition-dependent behavior and "
+                    "terminal outcomes; elapsed time alone does not determine task quality. "
+                    "Return a concise summary of normal behavior, strengths, possible problems, tradeoffs and "
+                    "alternative explanations, with supporting evidence_refs. Cite only supplied evidence IDs. "
+                    "No peer opinions are supplied. Set hypothesis_only=true. An empty claims list is allowed.")
+            return [context.analyze(used.record_ref, names[index % len(names)],
+                {"task": shared["task"], "rubric": shared["rubric"], "scenario": scenario.model_dump(),
+                 "focus": focuses[index % len(focuses)]}, role,
+                f"{base}/analyst_originals/session_{index:02d}/scenario_{scenario_index:04d}")
+                for scenario_index, (scenario, used) in enumerate(zip(suite.scenarios, uses))]
 
         # Separate stateless calls; all first passes finish and are sealed before reviews.
         with ThreadPoolExecutor(max_workers=m) as worker:
-            originals = list(worker.map(first_pass, range(m)))
+            batches = list(worker.map(first_pass, range(m)))
+        originals = [{"claims": [claim.model_copy(update={"claim_id": f"{i}:{claim.claim_id}"}).model_dump()
+            for i, result in enumerate(batch) for claim in result.claims],
+            "summaries": [{"scenario_id": s.scenario_id, "summary": result.summary,
+                           "evidence_refs": result.evidence_refs} for s, result in zip(suite.scenarios, batch)]}
+            for batch in batches]
         claims, owners = [], {}
         for index, original in enumerate(originals):
             self.store.save(f"{base}/analyst_originals/session_{index:02d}.json", original)
-            if len({c.claim_id for c in original.claims}) != len(original.claims):
-                raise ContractError("duplicate analyst claim ID")
-            for claim in original.claims:
-                item = claim.model_dump()
+            for claim in original["claims"]:
+                item = dict(claim)
                 # Namespace IDs for audit; peers receive neither author identity nor vote counts.
                 item["claim_id"] = digest({"session": index, "claim": item})[:24]
                 owners[item["claim_id"]] = index
                 claims.append(item)
         self.store.save(base + "/analyst_originals/seal.json", {"hashes": [digest(o) for o in originals]})
+        summaries = [item for original in originals for item in original["summaries"]]
+        overview = context.summarize(self.cfg.agents.arbiter, summaries,
+            {"task": shared["task"], "rubric": shared["rubric"]}, base + "/overview")
+        shared["behavior_summary"] = overview
+        def scoped(group):
+            ids = {claim["scenario_id"] for claim in group}
+            return {**shared, "scenarios": [s.model_dump() for s in suite.scenarios if s.scenario_id in ids]}
+
         claim_order = sorted(claims, key=lambda c: digest(c))
         shared_evidence = {}
         normalized = {}
@@ -120,26 +139,39 @@ class Evaluator:
             normalized.setdefault(" ".join(claim["claim"].lower().split()), []).append(claim["claim_id"])
             for ref in claim["evidence_refs"]:
                 shared_evidence.setdefault(ref, []).append(claim["claim_id"])
-        semantic = self.llm.ask(self.cfg.agents.independence,
-            "Analyze claim dependence, shared premises, causal chains and contradictions. "
-            "Repeated opinions are not independent evidence. Never use voting as proof.",
-            {**shared, "anonymous_claims": claim_order}, SemanticRelations, base + "/independence")
+        role = ("Analyze claim dependence, shared premises, causal chains and contradictions. "
+                "Repeated opinions are not independent evidence. Never use voting as proof.")
+        build = lambda group: {**scoped(group), "anonymous_claims": group}
+        semantic_parts = [context.ask(self.cfg.agents.independence, role, build(group), SemanticRelations,
+            f"{base}/independence/batch_{index:04d}") for index, group in enumerate(
+                context.groups(claim_order, build, self.cfg.agents.independence, role, SemanticRelations))]
+        semantic = SemanticRelations(**{field: [item for part in semantic_parts for item in getattr(part, field)]
+                                       for field in SemanticRelations.model_fields})
         independence = {"duplicates": [v for v in normalized.values() if len(v) > 1],
             "shared_evidence": {k: v for k, v in shared_evidence.items() if len(v) > 1},
-            "semantic": semantic.model_dump(), "statistical_independence_claimed": False}
+            "semantic": semantic.model_dump(), "statistical_independence_claimed": False,
+            "semantic_batch_count": len(semantic_parts)}
         self.store.save(base + "/independence_report.json", independence)
         reviews = []
-        all_evidence = [e.evidence_id for u in uses for e in u.record.evidence]
         for index in range(m):
             others = [c for c in claim_order if owners[c["claim_id"]] != index]
-            output = self.llm.ask(names[index % len(names)],
-                "Cross-review sealed anonymous peer claims. Seek counterexamples and missing conditions. "
-                "Complementary evidence is highlighted; all hard constraints and necessary context are available. "
-                "Do not invent observations. Original first passes are immutable.",
-                {**shared, "anonymous_claims": others,
-                 "highlighted_evidence_refs": all_evidence[index::m]}, ReviewOutput,
-                f"{base}/cross_reviews/session_{index:02d}")
-            reviews.append(output.model_dump())
+            role = ("Cross-review sealed anonymous peer claims using summaries and raw evidence excerpts. "
+                    "Seek counterexamples, alternative explanations and missing conditions. "
+                    "Acknowledge uninspected intervals; cite only supplied raw evidence IDs.")
+            profile = names[index % len(names)]
+            build = lambda group: context.with_evidence({**scoped(group), "anonymous_claims": group}, uses,
+                evidence_refs(group) if group else overview["evidence_refs"], profile, role, ReviewOutput)
+            parts = []
+            for batch_index, group in enumerate(context.groups(others, build, profile, role, ReviewOutput)):
+                payload = build(group)
+                part = context.ask(profile, role, payload, ReviewOutput,
+                    f"{base}/cross_reviews/session_{index:02d}/batch_{batch_index:04d}")
+                if not set(part.counter_evidence_refs) <= {e["evidence_id"] for e in payload["evidence"]}:
+                    raise ContractError("cross-review cites evidence outside its input")
+                reviews.append({"claim_ids": [c["claim_id"] for c in group], **part.model_dump()})
+                parts.append(part)
+            output = ReviewOutput(observations=[o for part in parts for o in part.observations],
+                counter_evidence_refs=list(dict.fromkeys(ref for part in parts for ref in part.counter_evidence_refs)))
             self.store.save(f"{base}/cross_reviews/session_{index:02d}.json", output)
         # Re-read immutable raw objects and verify provenance before building packets.
         evidence_index = {}
@@ -163,13 +195,35 @@ class Evaluator:
         anonymous_packets = [{**{key: value for key, value in p.items() if key != "records"},
                               "evidence_refs": [record["evidence_id"] for record in p["records"]]}
                              for p in packets]
-        verdicts = self.llm.ask(self.cfg.agents.arbiter,
-            "You are the single anomaly arbiter. Decide every claim exactly once using verified evidence, "
-            "counterarguments and frozen rubric. UNVERIFIED evidence cannot confirm a claim. "
-            "Do not rank algorithms, select populations, change code or stop evolution.",
-            {**shared, "claims": claim_order, "independence": independence,
-             "cross_reviews": reviews, "evidence_packets": anonymous_packets}, ArbiterOutput,
-            base + "/arbiter")
+        role = ("You are the single anomaly arbiter. Decide every supplied claim exactly once using verified "
+                "raw excerpts, counterarguments and the frozen rubric. Summaries are interpretations. "
+                "UNVERIFIED evidence cannot confirm a claim. Acknowledge uninspected intervals. "
+                "Do not rank algorithms, select populations, change code or stop evolution.")
+        def build(group):
+            ids = {c["claim_id"] for c in group}
+            selected_reviews = [r for r in reviews if not r["claim_ids"] or ids.intersection(r["claim_ids"])]
+            return context.with_evidence({**scoped(group), "claims": group, "independence": independence,
+                "cross_reviews": selected_reviews,
+                "evidence_packets": [p for p in anonymous_packets if p["claim_id"] in ids]}, uses,
+                evidence_refs(group) | {ref for r in selected_reviews for ref in r["counter_evidence_refs"]}
+                | (set(overview["evidence_refs"]) if not group else set()),
+                self.cfg.agents.arbiter, role, ArbiterOutput)
+        verdict_parts = []
+        for index, group in enumerate(context.groups(claim_order, build, self.cfg.agents.arbiter, role, ArbiterOutput)):
+            payload = build(group)
+            part = context.ask(self.cfg.agents.arbiter, role, payload, ArbiterOutput,
+                               f"{base}/arbiter/batch_{index:04d}")
+            if (len(part.verdicts) != len(group)
+                    or {v.claim_id for v in part.verdicts} != {c["claim_id"] for c in group}):
+                raise ContractError("arbiter must decide exactly the claims in its input batch")
+            supplied = {e["evidence_id"] for e in payload["evidence"]}
+            verdict_parts.append(part.model_copy(update={"verdicts": [v.model_copy(update={"status": "UNCONFIRMED",
+                "explanation": "Cited evidence was not supplied as a raw excerpt in this batch."})
+                if v.status == "CONFIRMED" and not set(v.evidence_refs) <= supplied else v for v in part.verdicts]}))
+        verdicts = ArbiterOutput(verdicts=[v for part in verdict_parts for v in part.verdicts],
+            strengths=list(dict.fromkeys(s for part in verdict_parts for s in part.strengths)),
+            tradeoffs=list(dict.fromkeys(t for part in verdict_parts for t in part.tradeoffs)))
+        self.store.save(base + "/arbiter/verdicts.json", verdicts)
         expected = {c["claim_id"] for c in claims}
         if len(verdicts.verdicts) != len(expected) or {v.claim_id for v in verdicts.verdicts} != expected:
             raise ContractError("arbiter must return exactly one verdict per proposed claim")
@@ -179,6 +233,7 @@ class Evaluator:
         for verdict in verdicts.verdicts:
             data = verdict.model_dump()
             scenario_id = claim_index[verdict.claim_id]["scenario_id"]
+            data["scenario_id"] = scenario_id
             refs_ok = bool(verdict.evidence_refs) and all(r in evidence_index and
                 evidence_index[r]["scenario_id"] == scenario_id for r in verdict.evidence_refs)
             if verdict.status == "CONFIRMED" and (packet_index[verdict.claim_id]["provenance_status"] != "VERIFIED" or not refs_ok):
@@ -188,13 +243,24 @@ class Evaluator:
             if data["status"] == "CONFIRMED":
                 symptoms.append({"scenario_id": scenario_id, "symptom": claim_index[verdict.claim_id]["claim"]})
         self.store.save(base + "/anomaly_verdicts.json", checked)
+        trace = []
+        for index, (scenario, used) in enumerate(zip(suite.scenarios, uses)):
+            summary = context.summarize(self.cfg.agents.arbiter,
+                [original["summaries"][index] for original in originals]
+                + [{"reviewed_finding": item} for item in checked if item["scenario_id"] == scenario.scenario_id],
+                {"task": shared["task"], "rubric": shared["rubric"], "scenario": scenario.model_dump(),
+                 "result_context": used.record.result.context}, f"{base}/reviewed_summaries/{index:04d}")
+            trace.append({"scenario_id": scenario.scenario_id, "summary": summary,
+                "context": used.record.result.context,
+                "evidence": context.snippets([used], set(summary["evidence_refs"]) |
+                    evidence_refs([item for item in checked if item["scenario_id"] == scenario.scenario_id]), radius=0)})
         profile = {"individual_alias": alias, "execution_status": "EXECUTABLE", "correctness_pass": True,
             "anomalies": checked, "strengths": verdicts.strengths, "tradeoffs": verdicts.tradeoffs,
             "trace": trace, "evidence_refs": sorted(evidence_index)}
         return profile, symptoms
 
     def compare(self, profiles: Dict[str, dict], suite: ScenarioSuite, prefix: str) -> List[PairJudgment]:
-        comparisons = []
+        comparisons, calls = [], 0
         maximum_candidates = 2 * self.cfg.experiment.population_size
         if len(profiles) > maximum_candidates:
             raise ContractError("comparison pool must not exceed 2P candidates")
@@ -207,15 +273,50 @@ class Evaluator:
             valid_evidence = set(profiles[left]["evidence_refs"]) | set(profiles[right]["evidence_refs"])
             for order, (a, b) in enumerate(((left, right), (right, left))):
                 location = f"{prefix}/evaluation/preferences/pair_{index:04d}/order_{order}"
-                result = self.llm.ask(self.cfg.agents.preference,
-                    "Compare anonymous A and B using the fixed rubric, same scenarios and real traces. "
-                    "Consider strengths, correctness, confirmed anomalies and tradeoffs, not anomaly counts. "
-                    "Cite evidence for a strict preference. Do not assume a total order.",
-                    {"task": self.cfg.task.model_dump(), "rubric": self.cfg.rubric.model_dump(),
-                     "suite": suite.model_dump(), "trace_format": TRACE_FORMAT,
-                     "A": {key: value for key, value in profiles[a].items() if key != "evidence_refs"},
-                     "B": {key: value for key, value in profiles[b].items() if key != "evidence_refs"}},
-                    PreferenceOutput, location)
+                role = ("Compare anonymous A and B using the fixed rubric and matched scenarios. "
+                    "Use reviewed behavior summaries and raw evidence excerpts, including strengths, "
+                    "confirmed problems, tradeoffs and opposing evidence. Jointly compare intensity settings. "
+                    "Partial judgments cover different conditions: weigh their substance, never count wins "
+                    "or anomalies as a score. Do not assume a total order. Cite supplied raw evidence for "
+                    "a strict preference. Keep the explanation concise and cite at most four evidence IDs.")
+                traces = [{t["scenario_id"]: {**t, "evidence": [e for e in t["evidence"]
+                    if e["evidence_id"] in t["summary"]["evidence_refs"]]}
+                    for t in profiles[key]["trace"]} for key in (a, b)]
+                items = [{"scenario": scenario.model_dump(), "A": traces[0][scenario.scenario_id],
+                          "B": traces[1][scenario.scenario_id]} for scenario in suite.scenarios]
+                raw = {e["evidence_id"]: e for trace in traces for item in trace.values() for e in item["evidence"]}
+                common = {"task": self.cfg.task.model_dump(), "rubric": self.cfg.rubric.model_dump(),
+                    "A": {key: profiles[a][key] for key in ("correctness_pass", "strengths", "tradeoffs")},
+                    "B": {key: profiles[b][key] for key in ("correctness_pass", "strengths", "tradeoffs")}}
+                def build(group):
+                    inline = {e["evidence_id"] for part in group for name in ("A", "B")
+                              for e in part.get(name, {}).get("evidence", [])}
+                    return {**common, "matched_observations_or_partial_judgments": group,
+                            "supporting_evidence": [raw[ref] for ref in sorted(evidence_refs(group) - inline) if ref in raw]}
+                for level in range(12):
+                    groups = self.context.groups(items, build, self.cfg.agents.preference, role, PreferenceOutput)
+                    parts = []
+                    for batch_index, group in enumerate(groups):
+                        payload = build(group)
+                        result = self.context.ask(self.cfg.agents.preference, role, payload, PreferenceOutput,
+                            f"{location}/level_{level:02d}/batch_{batch_index:04d}")
+                        calls += 1
+                        supplied = {e["evidence_id"] for e in payload["supporting_evidence"]}
+                        supplied.update(e["evidence_id"] for item in group for name in ("A", "B")
+                                        for e in item.get(name, {}).get("evidence", []))
+                        if (not set(result.evidence_refs) <= supplied or
+                                result.winner in ("A_BETTER", "B_BETTER") and not result.evidence_refs):
+                            result = result.model_copy(update={"winner": "INCOMPARABLE", "evidence_refs": []})
+                        parts.append({"scenario_ids": [sid for item in group for sid in
+                            (item["scenario_ids"] if "scenario_ids" in item else [item["scenario"]["scenario_id"]])],
+                            **result.model_dump()})
+                    if len(parts) == 1:
+                        break
+                    if level and len(parts) >= len(items):
+                        raise InfrastructureError("partial comparisons cannot fit within max_input_bytes")
+                    items = parts
+                else:
+                    raise InfrastructureError("comparison reduction exceeded its depth limit")
                 ref = self.store.save(location + "/judgment.json", result)
                 refs.append(ref)
                 valid = all(e in valid_evidence for e in result.evidence_refs)
@@ -232,5 +333,6 @@ class Evaluator:
             "maximum_candidates": maximum_candidates,
             "comparison_budget_per_generation": self.cfg.comparison_budget_per_generation,
             "eligible_candidates": len(profiles), "compared_pairs": len(comparisons),
-            "comparison_calls": 2 * len(comparisons), "all_pairs_covered": True})
+            "final_order_judgments": 2 * len(comparisons),
+            "comparison_calls": calls, "all_pairs_covered": True})
         return comparisons

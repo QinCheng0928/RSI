@@ -16,6 +16,22 @@ from evolution.storage import Store, artifact_id
 T = TypeVar("T", bound=Model)
 
 
+def build_request(settings: ModelProfile, role: str, payload: Dict[str, Any], schema: Type[Model]) -> dict:
+    request = {
+        "model": settings.model,
+        "messages": [
+            {"role": "system", "content": role + "\nReturn JSON matching this schema: " + canonical(schema.model_json_schema())},
+            {"role": "user", "content": canonical(payload)},
+        ],
+        "response_format": {"type": "json_object"},
+        **settings.parameters,
+    }
+    if settings.structured_output == "json_schema":
+        request["response_format"] = {"type": "json_schema", "json_schema": {
+            "name": schema.__name__, "schema": schema.model_json_schema(), "strict": False}}
+    return request
+
+
 class LLM(Protocol):
     def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str) -> T:
         ...
@@ -38,19 +54,14 @@ class OpenAIClient:
     def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str) -> T:
         settings = self.profiles[profile]
         call = prefix + "/llm/" + artifact_id()
-        request = {
-            "model": settings.model,
-            "messages": [
-                {"role": "system", "content": role + "\nReturn JSON matching this schema: " + canonical(schema.model_json_schema())},
-                {"role": "user", "content": canonical(payload)},
-            ],
-            "response_format": {"type": "json_object"},
-            **settings.parameters,
-        }
-        if settings.structured_output == "json_schema":
-            request["response_format"] = {"type": "json_schema", "json_schema": {
-                "name": schema.__name__, "schema": schema.model_json_schema(), "strict": False}}
+        request = build_request(settings, role, payload, schema)
         self.store.save(call + "/request.json", {"profile": profile, "base_url": settings.base_url, **request})
+        size = len(canonical(request).encode("utf-8"))
+        if size > settings.max_input_bytes:
+            self.store.save(call + "/error.json", {"category": "INPUT_BUDGET_EXCEEDED",
+                "input_bytes": size, "max_input_bytes": settings.max_input_bytes})
+            raise InfrastructureError(f"model input budget exceeded: {size} > {settings.max_input_bytes} bytes; "
+                                      "split the request or configure models.<profile>.max_input_bytes")
         # Credential routing and values both live in .env, outside problem YAML
         # and its archived snapshots. No profile-specific fallback is inferred.
         key_variable = os.environ.get(f"LLM_{profile.upper()}_API_KEY_ENV")

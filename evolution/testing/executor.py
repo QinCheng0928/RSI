@@ -1,8 +1,8 @@
 from __future__ import annotations
 from contextlib import ExitStack
 from typing import Dict, List
-
 import uuid
+from tqdm import tqdm
 
 from evolution.config import ExecutionConfig
 from evolution.errors import AlgorithmExecutionError, ContractError, InfrastructureError
@@ -89,10 +89,10 @@ class Executor:
 
     def _run(self, pool: List[Individual], suite: ScenarioSuite, prefix: str) -> Dict[str, List[RunUse]]:
         output, coverage, real_calls = {}, [], 0
-        for individual in pool:
+        for individual in tqdm(pool, desc=f"gen_{suite.generation:04d} 测试", unit="算法"):
             self.store.source(individual)
             uses, executed_keys, generation_error_keys, required, environment_failures = [], [], [], [], []
-            for scenario in suite.scenarios:
+            for scenario in tqdm(suite.scenarios, desc="测试场景", unit="场景", leave=False):
                 key = self.key(individual, scenario)
                 required.append(key.key)
                 for retry in range(self.cfg.infra_retries + 1):

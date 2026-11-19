@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
 from typing import Any, Dict, List, Tuple
+from tqdm import tqdm
 
 from evolution.config import ProblemConfig
 from evolution.errors import ContractError, InfrastructureError
@@ -25,7 +26,7 @@ class Evaluator:
         aliases = {i.individual_id: "candidate_" + digest({"id": i.individual_id,
             "generation": suite.generation, "seed": self.cfg.experiment.seed})[:12] for i in pool}
         self.store.save(prefix + "/evaluation/aliases.json", aliases)
-        for individual in pool:
+        for individual in tqdm(pool, desc=f"gen_{suite.generation:04d} 评估", unit="算法"):
             uses = execution[individual.individual_id]
             actual = {(u.record.execution_key.scenario_content_hash, u.record.execution_key.seed) for u in uses}
             if actual != conditions or len(uses) != len(suite.scenarios):
@@ -201,7 +202,7 @@ class Evaluator:
         pairs = sorted(combinations(profiles, 2), key=lambda p: digest({"pair": sorted(p),
             "seed": self.cfg.experiment.seed, "generation": suite.generation}))
         inverse = {"A_BETTER": "B_BETTER", "B_BETTER": "A_BETTER", "TIE": "TIE", "INCOMPARABLE": "INCOMPARABLE"}
-        for index, (left, right) in enumerate(pairs):
+        for index, (left, right) in enumerate(tqdm(pairs, desc=f"gen_{suite.generation:04d} 比较", unit="对")):
             outputs, refs = [], []
             valid_evidence = set(profiles[left]["evidence_refs"]) | set(profiles[right]["evidence_refs"])
             for order, (a, b) in enumerate(((left, right), (right, left))):

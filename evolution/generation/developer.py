@@ -1,11 +1,10 @@
 from __future__ import annotations
 from typing import List
-
 import difflib
 import random
 from pathlib import Path, PurePosixPath
-
 from pydantic import Field, create_model
+from tqdm import tqdm
 
 from evolution.config import ProblemConfig
 from evolution.errors import ContractError
@@ -67,7 +66,7 @@ class Developer:
                 raise ContractError(f"strategy planner returned {len(plan.strategies)} strategies; expected exactly {p}")
             strategies = plan.strategies
         produced, operations = [], []
-        for slot in range(p):
+        for slot in tqdm(range(p), desc=f"gen_{generation:04d} 生成", unit="算法"):
             chosen: List[Assessment] = []
             if parents:
                 if slot < len(repair_parents):

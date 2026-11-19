@@ -7,7 +7,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, Tuple
 
 from evolution.errors import ContractError
 from evolution.models import ExecutionRecord, Individual, Population, canonical, digest
@@ -174,9 +174,25 @@ class Store:
     def attempt(self, generation: int) -> str:
         return f"generations/gen_{generation:04d}/attempts/{artifact_id()}"
 
-    def discard_uncommitted(self, generation: int) -> None:
+    def resume_generation(self, generation: int) -> Tuple[str, str]:
+        attempts = sorted(p for p in self.path(f"generations/gen_{generation:04d}/attempts").glob("*")
+                          if p.is_dir())
+        prefix = str(attempts[-1].relative_to(self.root)) if attempts else self.attempt(generation)
+        checkpoint = self.path(prefix + "/stage.json")
+        stage = self.read(prefix + "/stage.json")["stage"] if checkpoint.exists() else "GENERATION"
+        if stage not in ("GENERATION", "TESTING", "EVALUATION"):
+            raise ContractError("unknown generation recovery stage")
+        self.discard_uncommitted(generation - 1, prefix, stage)
+        self.pointer(prefix + "/stage.json", {"stage": stage})
+        return prefix, stage
+
+    def discard_uncommitted(self, generation: int, keep_prefix: Optional[str] = None,
+                            stage: str = "GENERATION") -> None:
         pending = [path for path in self.path("generations").glob("gen_*")
                    if path.is_dir() and path.name[4:].isdigit() and int(path.name[4:]) > generation]
+        keep_path = self.path(keep_prefix) if keep_prefix is not None else None
+        keep_ids = (set(self.read(keep_prefix + "/generation/offspring_manifest.json")["produced_ids"])
+                    if keep_prefix is not None and stage != "GENERATION" else set())
         slots = [(str(path.parent.parent.relative_to(self.root)), int(path.name[5:]))
                  for directory in pending for path in directory.glob("attempts/*/generation/slot_*")
                  if path.is_dir() and path.name[5:].isdigit()]
@@ -189,6 +205,8 @@ class Store:
                     pending_ids.add(source_ref.split("/")[1])
         for path in self.path("individuals").glob("alg_*"):
             if not path.is_dir():
+                continue
+            if path.name in keep_ids:
                 continue
             metadata, lineage = path / "metadata.json", path / "lineage.json"
             if metadata.exists():
@@ -210,7 +228,31 @@ class Store:
                 continue
             shutil.rmtree(self.path(str(path.relative_to(self.root))))
         for directory in pending:
-            shutil.rmtree(self.path(str(directory.relative_to(self.root))))
+            if keep_path is not None and directory == keep_path.parent.parent:
+                for attempt in (directory / "attempts").glob("*"):
+                    if attempt != keep_path:
+                        if attempt.is_dir():
+                            shutil.rmtree(attempt)
+                        else:
+                            attempt.unlink()
+            else:
+                shutil.rmtree(self.path(str(directory.relative_to(self.root))))
+        if keep_path is not None and keep_path.exists():
+            if stage == "GENERATION":
+                remove = list(keep_path.iterdir())
+            else:
+                names = ["evaluation", "runtime_state.json", "memory_event.json"]
+                if stage == "TESTING":
+                    names.append("testing")
+                remove = [keep_path / name for name in names]
+            for path in remove:
+                if path.name != "stage.json" and path.exists():
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+            for path in keep_path.glob("*.tmp"):
+                path.unlink()
 
         object_pattern = re.compile(r"objects/[0-9a-f]{64}\.json")
         references = set()
@@ -229,6 +271,8 @@ class Store:
         for path in self.path("objects").glob("*.json"):
             if str(path.relative_to(self.root)) not in reachable:
                 path.unlink()
+        for path in self.path("objects").glob("*.tmp"):
+            path.unlink()
 
     def event(self, kind: str, value: Any) -> str:
         return self.save(f"events/{artifact_id()}.json", {"kind": kind, "data": value})

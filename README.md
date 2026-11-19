@@ -218,13 +218,13 @@ Other commands accept the same `--problem` and `--run-id` arguments:
 
 `generate` and `build-suite` require a working model service. Pass `--problem` explicitly to select the intended problem package.
 
-Reuse the same `run-id` with unchanged configuration and source code to resume from committed generations. Use a new `run-id` after changing problem configuration, problem implementation, or framework code.
+Reuse the same `run-id` with unchanged configuration and source code to resume at the interrupted generation's stage boundary. Use a new `run-id` after changing problem configuration, problem implementation, or framework code.
 
 ## Reproducibility and experimental reporting
 
-Each run freezes its resolved configuration and snapshots of problem and framework source. Execution records bind candidate code, scenario inputs, seed, simulator version, environment settings, and observation-contract fingerprints. Population commits provide the durable boundary for recovery.
+Each run freezes its resolved configuration and snapshots of problem and framework source. Execution records bind candidate code, scenario inputs, seed, simulator version, environment settings, and observation-contract fingerprints. Population commits preserve completed generations; each attempt's `stage.json` records the recovery boundary within an uncommitted generation.
 
-Reuse a `run-id` only with unchanged configuration and source code. A resumed run starts from the latest committed population, removes later uncommitted generations, their candidates, and unreferenced content objects, then regenerates and executes the next generation in full. If no population has been committed, initialization starts again. Changes to configuration, problem implementation, or framework source require a new `run-id`.
+Reuse a `run-id` only with unchanged configuration and source code. Recovery retains completed upstream stages and restarts the interrupted stage from its beginning: generation regenerates every offspring; testing retains offspring but rebuilds the scenario suite and reruns the entire candidate pool; evaluation retains offspring, scenarios, and verified execution records but repeats correctness checks, behavioral analysis, comparisons, selection, and population commit. Evaluation recovery does not connect to the simulator unless a later generation needs testing. Files from the interrupted stage and downstream stages, abandoned attempts and candidates, and unreferenced content objects are removed before retrying. Without a stage checkpoint, recovery restarts generation. The same rules apply to generation zero. Changes to configuration, problem implementation, or framework source require a new `run-id`.
 
 A fixed framework seed controls its own sampling and tie-breaking. It does not make remote model responses or an external environment deterministic. State variation, environment updates, and asynchronous communication can change observed behavior, so evaluation uses the current generation's execution evidence.
 

@@ -11,7 +11,7 @@ from evolution.evaluation import Evaluator, Selector
 from evolution.framework import ProblemSpec, Simulator
 from evolution.generation import Developer
 from evolution.llm import LLM, OpenAIClient
-from evolution.models import Individual, Population, Scenario, Status
+from evolution.models import Individual, Population, Scenario, ScenarioSuite, Status
 from evolution.storage import Store, atomic_text, is_within
 from evolution.testing import Executor, Tester
 
@@ -138,13 +138,28 @@ class Evolution:
         report = self.store.read(population.selection_report_ref)
         return self.store.read(report["runtime_state_ref"])
 
+    def load_offspring(self, generation: int, parents: list, prefix: str) -> list:
+        manifest = self.store.read(prefix + "/generation/offspring_manifest.json")
+        ids = manifest["produced_ids"]
+        if (manifest["generation"] != generation or manifest["target_count"] != self.cfg.experiment.population_size
+                or len(ids) != self.cfg.experiment.population_size or len(set(ids)) != len(ids)):
+            raise ContractError("saved offspring manifest is incomplete or inconsistent")
+        offspring = [Individual.model_validate(self.store.read(f"individuals/{key}/metadata.json")) for key in ids]
+        parent_ids = {a.individual.individual_id for a in parents}
+        for key, individual in zip(ids, offspring):
+            if (individual.individual_id != key or individual.generation_born != generation
+                    or not set(individual.parent_ids) <= parent_ids
+                    or not self.store.read(individual.lineage_ref)["output_ref"].startswith(prefix + "/generation/")):
+                raise ContractError("saved offspring identity/generation mismatch")
+            self.store.source(individual)
+        return offspring
+
     def run(self) -> dict:
         with run_lock(self.store):
             self.prepare()
             population = self.store.load_population(self.cfg.experiment.population_size)
             if population and population.config_hash != self.fingerprint:
                 raise ContractError("population configuration differs from frozen run")
-            self.store.discard_uncommitted(population.generation if population else -1)
             reviewed_memory = []
             for path in sorted(self.store.path("populations").glob("gen_*.json"))[-3:]:
                 committed = self.store.read(str(path.relative_to(self.store.root)))
@@ -152,38 +167,55 @@ class Evolution:
                 attempt = report_ref.rsplit("/evaluation/", 1)[0]
                 reviewed_memory.append(self.store.read(attempt + "/memory_event.json"))
             if population and population.generation == self.cfg.experiment.generations:
+                self.store.discard_uncommitted(population.generation)
                 return self.manifest("COMPLETED", population)
             try:
-                # TODO adapter blocks before spending model tokens or generating fake traces.
-                self.executor.check_readiness()
+                ready = False
                 start = population.generation + 1 if population else 0
                 for generation in range(start, self.cfg.experiment.generations + 1):
-                    prefix = self.store.attempt(generation)
+                    prefix, stage = self.store.resume_generation(generation)
+                    if stage != "EVALUATION" and not ready:
+                        self.executor.check_readiness()
+                        ready = True
                     previous = self.previous_state(population)
                     parents = population.assessments if population else []
-                    developer_feedback = {"selected_assessments": [a.model_dump(mode="json") for a in parents],
-                        "reviewed_memory": reviewed_memory, "behavior_feedback": {}}
-                    for parent in parents:
-                        if parent.profile_ref:
-                            profile = self.store.read(parent.profile_ref)
-                            developer_feedback["behavior_feedback"][parent.individual.individual_id] = {
-                                "confirmed_anomalies": [a for a in profile["anomalies"] if a["status"] == "CONFIRMED"],
-                                "strengths": profile["strengths"], "tradeoffs": profile["tradeoffs"],
-                                "trace": profile["trace"]}
-                    offspring = self.developer.generate(generation, parents, prefix, developer_feedback)
+                    if stage == "GENERATION":
+                        developer_feedback = {"selected_assessments": [a.model_dump(mode="json") for a in parents],
+                            "reviewed_memory": reviewed_memory, "behavior_feedback": {}}
+                        for parent in parents:
+                            if parent.profile_ref:
+                                profile = self.store.read(parent.profile_ref)
+                                developer_feedback["behavior_feedback"][parent.individual.individual_id] = {
+                                    "confirmed_anomalies": [a for a in profile["anomalies"] if a["status"] == "CONFIRMED"],
+                                    "strengths": profile["strengths"], "tradeoffs": profile["tradeoffs"],
+                                    "trace": profile["trace"]}
+                        offspring = self.developer.generate(generation, parents, prefix, developer_feedback)
+                    else:
+                        offspring = self.load_offspring(generation, parents, prefix)
                     pool = [a.individual for a in parents] + offspring
                     if len(pool) > 2 * self.cfg.experiment.population_size or len({i.individual_id for i in pool}) != len(pool):
                         raise ContractError("pool must contain at most 2P distinct candidate IDs")
-                    core = ([Scenario.model_validate(s) for s in previous["core"]] if population
-                            else [Scenario.model_validate(s) for s in self.cfg.core_scenarios])
-                    old = [Scenario.model_validate(s) for s in previous["suite"]]
-                    # Confirmed anomaly scenarios become regressions. Old adaptive cases are
-                    # retained too, preserving comparable historical coverage across generations.
-                    regression_ids = {f["scenario_id"] for f in previous["feedback"]}
-                    regression = [s for s in old if s.scenario_id in regression_ids]
-                    suite = self.tester.build(generation, core, old, regression,
-                        previous["coverage"], previous["feedback"], prefix)
-                    execution = self.executor.run(pool, suite, prefix)
+                    if stage == "GENERATION":
+                        self.store.pointer(prefix + "/stage.json", {"stage": "TESTING"})
+                    if stage == "EVALUATION":
+                        suite = ScenarioSuite.model_validate(self.store.read(prefix + "/testing/suite.json"))
+                        if (suite.generation != generation or suite.scenario_space_version != self.cfg.scenario_space.version
+                                or suite.rubric_version != self.cfg.rubric.rubric_version):
+                            raise ContractError("saved scenario suite version/generation mismatch")
+                        for scenario in suite.scenarios:
+                            self.spec.validate_scenario(scenario)
+                        execution = self.executor.load(pool, suite, prefix)
+                    else:
+                        core = ([Scenario.model_validate(s) for s in previous["core"]] if population
+                                else [Scenario.model_validate(s) for s in self.cfg.core_scenarios])
+                        old = [Scenario.model_validate(s) for s in previous["suite"]]
+                        # Confirmed anomaly scenarios become regressions; retain older adaptive cases too.
+                        regression_ids = {f["scenario_id"] for f in previous["feedback"]}
+                        regression = [s for s in old if s.scenario_id in regression_ids]
+                        suite = self.tester.build(generation, core, old, regression,
+                            previous["coverage"], previous["feedback"], prefix)
+                        execution = self.executor.run(pool, suite, prefix)
+                        self.store.pointer(prefix + "/stage.json", {"stage": "EVALUATION"})
                     assessments, comparisons, feedback = self.evaluator.evaluate(pool, execution, suite, prefix)
                     selected, report = self.selector.select(generation, assessments, comparisons, bootstrap=generation == 0)
                     covered = [{"scenario_id": s.scenario_id, "content_hash": s.content_hash,

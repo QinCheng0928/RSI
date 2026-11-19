@@ -5,7 +5,7 @@ from typing import Dict, List
 import uuid
 
 from evolution.config import ExecutionConfig
-from evolution.errors import AlgorithmExecutionError, InfrastructureError
+from evolution.errors import AlgorithmExecutionError, ContractError, InfrastructureError
 from evolution.framework import Simulator
 from evolution.models import (Coverage, Evidence, ExecutionKey, ExecutionRecord, Individual,
                               RunUse, Scenario, ScenarioSuite, SimulatorResult, Status, digest)
@@ -55,6 +55,37 @@ class Executor:
             if testing_batch is not None:
                 resources.enter_context(testing_batch(self.cfg))
             return self._run(pool, suite, prefix)
+
+    def load(self, pool: List[Individual], suite: ScenarioSuite, prefix: str) -> Dict[str, List[RunUse]]:
+        references = self.store.read(prefix + "/testing/execution_uses.json")
+        report = self.store.read(prefix + "/testing/coverage_report.json")
+        coverage = [Coverage.model_validate(item) for item in report["coverage"]]
+        ids = [individual.individual_id for individual in pool]
+        if set(references) != set(ids) or [c.individual_id for c in coverage] != ids:
+            raise ContractError("saved testing pool differs from the generation pool")
+        output = {}
+        for individual, covered in zip(pool, coverage):
+            items = references[individual.individual_id]
+            keys = [self.key(individual, scenario) for scenario in suite.scenarios]
+            required = [key.key for key in keys]
+            generated = bool(individual.generation_errors)
+            if (len(items) != len(suite.scenarios) or covered.required_execution_keys != required
+                    or covered.missing_keys or covered.executed_keys != ([] if generated else required)
+                    or covered.generation_error_keys != (required if generated else [])):
+                raise ContractError("saved testing coverage is incomplete or inconsistent")
+            uses = []
+            for item, scenario, key in zip(items, suite.scenarios, keys):
+                record = self.store.load_execution(item["record_ref"])
+                if (item["individual_id"] != individual.individual_id
+                        or record.individual_id != individual.individual_id
+                        or record.scenario_id != scenario.scenario_id or record.execution_key != key
+                        or record.provenance != ("GENERATION_ERROR" if generated else "SIMULATOR")
+                        or record.result.status == Status.INFRA_ERROR):
+                    raise ContractError("saved execution identity/configuration mismatch")
+                uses.append(RunUse(individual_id=individual.individual_id,
+                                   record=record, record_ref=item["record_ref"]))
+            output[individual.individual_id] = uses
+        return output
 
     def _run(self, pool: List[Individual], suite: ScenarioSuite, prefix: str) -> Dict[str, List[RunUse]]:
         output, coverage, real_calls = {}, [], 0

@@ -107,6 +107,7 @@ class Developer:
             for assessment in chosen:
                 parent = assessment.individual
                 lineage = self.store.read(parent.lineage_ref)
+                diagnosis = assessment.diagnosis.model_dump(exclude={"failure_refs"}) if assessment.diagnosis else None
                 failure_records, failure_uses = [], []
                 for index, ref in enumerate(assessment.diagnosis.failure_refs if assessment.diagnosis else []):
                     record = self.store.load_execution(ref)
@@ -114,10 +115,13 @@ class Developer:
                         raise ContractError("failure record does not belong to the chosen parent")
                     failure_uses.append(RunUse(individual_id=parent.individual_id, record=record, record_ref=ref))
                     note = self.context.analyze(ref, cfg.agents.generator,
-                        {"task": cfg.task.model_dump(), "diagnosis": assessment.diagnosis.model_dump()},
+                        {"task": cfg.task.model_dump(), "diagnosis": diagnosis},
                         "Summarize this parent's observed failure and normal behavior for a later repair. "
                         "Jointly compare all supplied conditions and intensities. Preserve alternative "
-                        "explanations, terminal outcomes and evidence IDs. Do not propose code yet.",
+                        "explanations and terminal outcomes. The parent diagnosis covers multiple scenarios; "
+                        "this input contains only the current scenario. Return evidence_refs copied exactly "
+                        "from observations[].evidence_id, never file paths or other identifiers. If observations "
+                        "are present, cite at least one. Do not propose code yet.",
                         f"{location}/failures/{parent.individual_id}/scenario_{index:04d}", TraceSummary)
                     failure_records.append({"scenario_id": record.scenario_id, **note.model_dump()})
                 if failure_records:
@@ -127,7 +131,7 @@ class Developer:
                         "evidence": self.context.snippets(failure_uses, note["evidence_refs"], radius=0)}
                 parent_inputs.append({"individual": parent.model_dump(), "needs_repair": assessment.needs_repair,
                     "files": self.store.source(parent),
-                    "diagnosis": assessment.diagnosis.model_dump() if assessment.diagnosis else None,
+                    "diagnosis": diagnosis,
                     "failure_records": failure_records,
                     "generation_output": {"strategy_tag": parent.strategy_tag,
                         "rationale": lineage["recombination_plan"], "generation_errors": parent.generation_errors}})

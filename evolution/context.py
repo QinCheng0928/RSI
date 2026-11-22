@@ -78,14 +78,16 @@ class TraceContext:
 
     def analyze(self, ref, profile, common, role, prefix, schema=AnalystOutput):
         record = self.store.load_execution(ref)
+        aliases = {f"E{index}": e.evidence_id for index, e in enumerate(record.evidence)}
         common = {**common, "scenario_id": record.scenario_id, "seed": record.execution_key.seed,
                   "execution_status": record.result.status.value, "failure_category": record.result.failure_category,
                   "result_context": record.result.context}
-        payload = {**common, "observations": [{"evidence_id": e.evidence_id,
-            "observation": {k: v for k, v in e.observation.items() if k != "context"}} for e in record.evidence],
+        payload = {**common, "observations": [{"evidence_id": alias,
+            "observation": {k: v for k, v in e.observation.items() if k != "context"}}
+            for alias, e in zip(aliases, record.evidence)],
             "stdout": record.result.stdout, "stderr": record.result.stderr}
         result = self.ask(profile, role, payload, schema, prefix + "/joint_analysis")
-        supplied = evidence_refs(payload)
+        self.store.save(prefix + "/evidence_aliases.json", {"record_ref": ref, "aliases": aliases})
         refs = set(result.evidence_refs)
         if isinstance(result, AnalystOutput):
             if len({c.claim_id for c in result.claims}) != len(result.claims):
@@ -94,9 +96,13 @@ class TraceContext:
                 if claim.scenario_id != record.scenario_id or not claim.hypothesis_only:
                     raise ContractError("analyst claim has the wrong scenario or is not a hypothesis")
                 refs.update(claim.evidence_refs)
-        if not refs <= supplied or record.evidence and not result.evidence_refs:
+        if not refs <= set(aliases) or record.evidence and not result.evidence_refs:
             raise ContractError("analysis must cite supplied evidence without inventing references")
-        return result
+        updates = {"evidence_refs": [aliases[ref] for ref in result.evidence_refs]}
+        if isinstance(result, AnalystOutput):
+            updates["claims"] = [claim.model_copy(update={"evidence_refs": [aliases[ref] for ref in claim.evidence_refs]})
+                                 for claim in result.claims]
+        return result.model_copy(update=updates)
 
     @staticmethod
     def snippets(uses, refs, radius=1):

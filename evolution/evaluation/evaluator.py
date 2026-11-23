@@ -197,12 +197,16 @@ class Evaluator:
                              for p in packets]
         role = ("You are the single anomaly arbiter. Decide every supplied claim exactly once using verified "
                 "raw excerpts, counterarguments and the frozen rubric. Summaries are interpretations. "
+                "Copy each required_claim_ids entry exactly once into verdicts; do not merge related claims "
+                "or decide IDs appearing only in background context. If evidence is insufficient, return "
+                "UNCONFIRMED for that claim rather than omitting it. "
                 "UNVERIFIED evidence cannot confirm a claim. Acknowledge uninspected intervals. "
                 "Do not rank algorithms, select populations, change code or stop evolution.")
         def build(group):
             ids = {c["claim_id"] for c in group}
             selected_reviews = [r for r in reviews if not r["claim_ids"] or ids.intersection(r["claim_ids"])]
             return context.with_evidence({**scoped(group), "claims": group, "independence": independence,
+                "required_claim_ids": [c["claim_id"] for c in group],
                 "cross_reviews": selected_reviews,
                 "evidence_packets": [p for p in anonymous_packets if p["claim_id"] in ids]}, uses,
                 evidence_refs(group) | {ref for r in selected_reviews for ref in r["counter_evidence_refs"]}
@@ -210,16 +214,27 @@ class Evaluator:
                 self.cfg.agents.arbiter, role, ArbiterOutput)
         verdict_parts = []
         for index, group in enumerate(context.groups(claim_order, build, self.cfg.agents.arbiter, role, ArbiterOutput)):
-            payload = build(group)
-            part = context.ask(self.cfg.agents.arbiter, role, payload, ArbiterOutput,
-                               f"{base}/arbiter/batch_{index:04d}")
-            if (len(part.verdicts) != len(group)
-                    or {v.claim_id for v in part.verdicts} != {c["claim_id"] for c in group}):
-                raise ContractError("arbiter must decide exactly the claims in its input batch")
-            supplied = {e["evidence_id"] for e in payload["evidence"]}
-            verdict_parts.append(part.model_copy(update={"verdicts": [v.model_copy(update={"status": "UNCONFIRMED",
-                "explanation": "Cited evidence was not supplied as a raw excerpt in this batch."})
-                if v.status == "CONFIRMED" and not set(v.evidence_refs) <= supplied else v for v in part.verdicts]}))
+            pending = group
+            for followup in range(2):
+                payload = build(pending)
+                location = f"{base}/arbiter/batch_{index:04d}" + ("/missing" if followup else "")
+                part = context.ask(self.cfg.agents.arbiter, role, payload, ArbiterOutput, location)
+                required, returned = {c["claim_id"] for c in pending}, [v.claim_id for v in part.verdicts]
+                returned_ids = set(returned)
+                unexpected, duplicate_count = returned_ids - required, len(returned) - len(returned_ids)
+                if unexpected or duplicate_count:
+                    raise ContractError("arbiter must decide exactly the claims in its input batch: "
+                        f"unexpected={sorted(unexpected)}, duplicate_count={duplicate_count}")
+                supplied = {e["evidence_id"] for e in payload["evidence"]}
+                verdict_parts.append(part.model_copy(update={"verdicts": [v.model_copy(update={"status": "UNCONFIRMED",
+                    "explanation": "Cited evidence was not supplied as a raw excerpt in this batch."})
+                    if v.status == "CONFIRMED" and not set(v.evidence_refs) <= supplied else v for v in part.verdicts]}))
+                pending = [c for c in pending if c["claim_id"] not in returned_ids]
+                if not pending:
+                    break
+            else:
+                raise ContractError("arbiter must decide exactly the claims in its input batch: "
+                                    f"missing={sorted(c['claim_id'] for c in pending)}")
         verdicts = ArbiterOutput(verdicts=[v for part in verdict_parts for v in part.verdicts],
             strengths=list(dict.fromkeys(s for part in verdict_parts for s in part.strengths)),
             tradeoffs=list(dict.fromkeys(t for part in verdict_parts for t in part.tradeoffs)))

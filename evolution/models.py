@@ -162,7 +162,20 @@ class AnomalyClaim(Model):
 class AnalystOutput(Model):
     claims: List[AnomalyClaim]
     summary: str = Field(min_length=1, max_length=4000)
-    evidence_refs: List[str] = Field(max_length=12)
+    evidence_refs: List[str] = Field(max_length=12,
+        description="Evidence supporting the overall summary; required separately from each claim's evidence_refs.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def references_from_claims(cls, value):
+        if isinstance(value, dict) and "evidence_refs" not in value and isinstance(value.get("claims"), list):
+            refs = []
+            for claim in value["claims"]:
+                if isinstance(claim, dict) and isinstance(claim.get("evidence_refs"), list):
+                    refs.extend(ref for ref in claim["evidence_refs"] if isinstance(ref, str))
+            if refs:
+                return {**value, "evidence_refs": list(dict.fromkeys(refs))[:12]}
+        return value
 
 
 class TraceSummary(Model):

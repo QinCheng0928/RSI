@@ -164,10 +164,13 @@ class Evaluator:
             parts = []
             for batch_index, group in enumerate(context.groups(others, build, profile, role, ReviewOutput)):
                 payload = build(group)
+                def validate_review(part):
+                    invalid = set(part.counter_evidence_refs) - {e["evidence_id"] for e in payload["evidence"]}
+                    if invalid:
+                        raise ContractError(f"cross-review cites evidence outside its input: {sorted(invalid)}; "
+                                            "copy counter_evidence_refs from the supplied raw evidence only")
                 part = context.ask(profile, role, payload, ReviewOutput,
-                    f"{base}/cross_reviews/session_{index:02d}/batch_{batch_index:04d}")
-                if not set(part.counter_evidence_refs) <= {e["evidence_id"] for e in payload["evidence"]}:
-                    raise ContractError("cross-review cites evidence outside its input")
+                    f"{base}/cross_reviews/session_{index:02d}/batch_{batch_index:04d}", validate=validate_review)
                 reviews.append({"claim_ids": [c["claim_id"] for c in group], **part.model_dump()})
                 parts.append(part)
             output = ReviewOutput(observations=[o for part in parts for o in part.observations],
@@ -218,13 +221,23 @@ class Evaluator:
             for followup in range(2):
                 payload = build(pending)
                 location = f"{base}/arbiter/batch_{index:04d}" + ("/missing" if followup else "")
-                part = context.ask(self.cfg.agents.arbiter, role, payload, ArbiterOutput, location)
-                required, returned = {c["claim_id"] for c in pending}, [v.claim_id for v in part.verdicts]
-                returned_ids = set(returned)
-                unexpected, duplicate_count = returned_ids - required, len(returned) - len(returned_ids)
-                if unexpected or duplicate_count:
-                    raise ContractError("arbiter must decide exactly the claims in its input batch: "
-                        f"unexpected={sorted(unexpected)}, duplicate_count={duplicate_count}")
+                def validate_arbiter(part):
+                    required = {c["claim_id"] for c in pending}
+                    returned = [v.claim_id for v in part.verdicts]
+                    unexpected = set(returned) - required
+                    duplicate_count = len(returned) - len(set(returned))
+                    if unexpected or duplicate_count:
+                        raise ContractError("arbiter must decide exactly the claims in its input batch: "
+                            f"unexpected={sorted(unexpected)}, duplicate_count={duplicate_count}; "
+                            "copy each required_claim_ids entry exactly once")
+                    invalid = {ref for v in part.verdicts for ref in v.evidence_refs} - {
+                        e["evidence_id"] for e in payload["evidence"]}
+                    if invalid:
+                        raise ContractError(f"arbiter cites evidence outside its input: {sorted(invalid)}; "
+                                            "cite only supplied raw excerpts; use UNCONFIRMED if unsupported")
+                part = context.ask(self.cfg.agents.arbiter, role, payload, ArbiterOutput, location,
+                                   validate=validate_arbiter)
+                returned_ids = {v.claim_id for v in part.verdicts}
                 supplied = {e["evidence_id"] for e in payload["evidence"]}
                 verdict_parts.append(part.model_copy(update={"verdicts": [v.model_copy(update={"status": "UNCONFIRMED",
                     "explanation": "Cited evidence was not supplied as a raw excerpt in this batch."})
@@ -313,8 +326,18 @@ class Evaluator:
                     parts = []
                     for batch_index, group in enumerate(groups):
                         payload = build(group)
+                        def validate_preference(result):
+                            supplied = {e["evidence_id"] for e in payload["supporting_evidence"]}
+                            supplied.update(e["evidence_id"] for item in group for name in ("A", "B")
+                                            for e in item.get(name, {}).get("evidence", []))
+                            invalid = set(result.evidence_refs) - supplied
+                            strict = result.winner in ("A_BETTER", "B_BETTER")
+                            if invalid or strict and not result.evidence_refs:
+                                raise ContractError(f"preference cites invalid evidence: {sorted(invalid)}; "
+                                    "a strict preference requires supplied raw evidence; otherwise return "
+                                    "TIE or INCOMPARABLE as justified by the input")
                         result = self.context.ask(self.cfg.agents.preference, role, payload, PreferenceOutput,
-                            f"{location}/level_{level:02d}/batch_{batch_index:04d}")
+                            f"{location}/level_{level:02d}/batch_{batch_index:04d}", validate=validate_preference)
                         calls += 1
                         supplied = {e["evidence_id"] for e in payload["supporting_evidence"]}
                         supplied.update(e["evidence_id"] for item in group for name in ("A", "B")

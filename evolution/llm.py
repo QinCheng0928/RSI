@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-from typing import Any, Optional, Protocol, Type, TypeVar, Dict
+from typing import Any, Callable, Optional, Protocol, Type, TypeVar, Dict
 
 from dotenv import load_dotenv
 from openai import APIError, OpenAI
@@ -33,7 +34,8 @@ def build_request(settings: ModelProfile, role: str, payload: Dict[str, Any], sc
 
 
 class LLM(Protocol):
-    def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str) -> T:
+    def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str,
+            validate: Optional[Callable[[T], None]] = None) -> T:
         ...
 
 
@@ -51,9 +53,27 @@ class OpenAIClient:
         self.profiles, self.store = profiles, store
         self.clients: Dict[str, OpenAI] = {}
 
-    def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str) -> T:
+    def ask(self, profile: str, role: str, payload: Dict[str, Any], schema: Type[T], prefix: str,
+            validate: Optional[Callable[[T], None]] = None) -> T:
+        correction = None
+        for attempt in range(2):
+            try:
+                return self._ask(profile, role, payload, schema, prefix, validate, correction)
+            except ContractError as error:
+                if attempt:
+                    raise
+                detail = str(error.__cause__) if isinstance(error.__cause__, ValidationError) else str(error)
+                correction = {"instruction": "The previous response failed validation. Return a complete corrected "
+                    "response for the original task using only the supplied input. Correct the reported errors; "
+                    "do not invent evidence or silently remove supported findings. Return JSON, not an explanation.",
+                    "validation_error": detail[:6000]}
+                print(f"LLM 返回校验失败，正在修正（最多 1 次）：{prefix}", file=sys.stderr, flush=True)
+
+    def _ask(self, profile, role, payload, schema, prefix, validate, correction):
         settings = self.profiles[profile]
         call = prefix + "/llm/" + artifact_id()
+        if correction is not None:
+            payload = {**payload, "output_correction": correction}
         request = build_request(settings, role, payload, schema)
         self.store.save(call + "/request.json", {"profile": profile, "base_url": settings.base_url, **request})
         size = len(canonical(request).encode("utf-8"))
@@ -92,4 +112,10 @@ class OpenAIClient:
         except ValidationError as error:
             self.store.save(call + "/error.json", {"category": "SCHEMA_VALIDATION", "detail": str(error)})
             raise ContractError("invalid model JSON; see " + call) from error
+        if validate is not None:
+            try:
+                validate(parsed)
+            except ContractError as error:
+                self.store.save(call + "/error.json", {"category": "CONTRACT_VALIDATION", "detail": str(error)})
+                raise
         return parsed

@@ -26,12 +26,14 @@ class TraceContext:
         settings = self.cfg.models[profile]
         return len(canonical(build_request(settings, role, payload, schema)).encode("utf-8")) <= settings.max_input_bytes
 
-    def ask(self, profile, role, payload, schema, prefix):
+    def ask(self, profile, role, payload, schema, prefix, validate=None):
         if not self.fits(profile, role, payload, schema):
             size = len(canonical(build_request(self.cfg.models[profile], role, payload, schema)).encode("utf-8"))
             raise InfrastructureError(f"model input budget exceeded: {size} > "
                                       f"{self.cfg.models[profile].max_input_bytes} bytes at {prefix}")
-        return self.llm.ask(profile, role, payload, schema, prefix)
+        if validate is None:
+            return self.llm.ask(profile, role, payload, schema, prefix)
+        return self.llm.ask(profile, role, payload, schema, prefix, validate=validate)
 
     def groups(self, items, build, profile, role, schema):
         groups, current = [], []
@@ -62,11 +64,15 @@ class TraceContext:
             groups = self.groups(items, build, profile, role, TraceSummary)
             notes = []
             for index, group in enumerate(groups):
-                note = self.ask(profile, role, build(group), TraceSummary,
-                                f"{prefix}/level_{level:02d}/part_{index:04d}")
                 available = evidence_refs(group)
-                if not set(note.evidence_refs) <= available or available and not note.evidence_refs:
-                    raise ContractError("summary must cite available evidence without inventing references")
+                def validate(note):
+                    invalid = set(note.evidence_refs) - available
+                    if invalid or available and not note.evidence_refs:
+                        raise ContractError("summary must cite available evidence: "
+                            f"invalid_refs={sorted(invalid)}, at_least_one_required={bool(available)}; "
+                            "copy evidence IDs exactly from the supplied parts")
+                note = self.ask(profile, role, build(group), TraceSummary,
+                                f"{prefix}/level_{level:02d}/part_{index:04d}", validate=validate)
                 self.store.save(f"{prefix}/level_{level:02d}/part_{index:04d}.json", note)
                 notes.append(note.model_dump())
             if len(notes) == 1:
@@ -86,18 +92,25 @@ class TraceContext:
             "observation": {k: v for k, v in e.observation.items() if k != "context"}}
             for alias, e in zip(aliases, record.evidence)],
             "stdout": record.result.stdout, "stderr": record.result.stderr}
-        result = self.ask(profile, role, payload, schema, prefix + "/joint_analysis")
+        def validate(result):
+            refs = set(result.evidence_refs)
+            if isinstance(result, AnalystOutput):
+                if len({c.claim_id for c in result.claims}) != len(result.claims):
+                    raise ContractError("duplicate analyst claim ID within a scenario; assign unique claim_id values")
+                for claim in result.claims:
+                    if claim.scenario_id != record.scenario_id or not claim.hypothesis_only:
+                        raise ContractError(f"claim {claim.claim_id} must have scenario_id={record.scenario_id!r} "
+                                            "and hypothesis_only=true")
+                    refs.update(claim.evidence_refs)
+            invalid = refs - set(aliases)
+            if invalid or record.evidence and not result.evidence_refs:
+                allowed = f"E0 through E{len(aliases) - 1}" if aliases else "none (no observations)"
+                raise ContractError("analysis must cite supplied evidence without inventing references: "
+                    f"invalid_refs={sorted(invalid)}, allowed_ids={allowed}, "
+                    f"nonempty_summary_evidence_refs_required={bool(record.evidence)}; "
+                    "correct both structured citations and citations in the summary and claims")
+        result = self.ask(profile, role, payload, schema, prefix + "/joint_analysis", validate=validate)
         self.store.save(prefix + "/evidence_aliases.json", {"record_ref": ref, "aliases": aliases})
-        refs = set(result.evidence_refs)
-        if isinstance(result, AnalystOutput):
-            if len({c.claim_id for c in result.claims}) != len(result.claims):
-                raise ContractError("duplicate analyst claim ID within a scenario")
-            for claim in result.claims:
-                if claim.scenario_id != record.scenario_id or not claim.hypothesis_only:
-                    raise ContractError("analyst claim has the wrong scenario or is not a hypothesis")
-                refs.update(claim.evidence_refs)
-        if not refs <= set(aliases) or record.evidence and not result.evidence_refs:
-            raise ContractError("analysis must cite supplied evidence without inventing references")
         updates = {"evidence_refs": [aliases[ref] for ref in result.evidence_refs]}
         if isinstance(result, AnalystOutput):
             updates["claims"] = [claim.model_copy(update={"evidence_refs": [aliases[ref] for ref in claim.evidence_refs]})

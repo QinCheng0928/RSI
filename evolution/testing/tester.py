@@ -28,11 +28,22 @@ class Tester:
         payload = {"task": self.task.model_dump(), "scenario_space": self.space.model_dump(),
             "generation": generation, "coverage": coverage, "sanitized_feedback": feedback,
             "known_scenarios": [s.model_dump() for s in core + previous + regression]}
+        def validate(proposal):
+            names = {s.scenario_id: s.content_hash for s in core + previous + regression}
+            for scenario in proposal.scenarios:
+                try:
+                    self.spec.validate_scenario(scenario)
+                except ValueError as error:
+                    raise ContractError(f"invalid generated scenario {scenario.scenario_id}: {error}") from error
+                if scenario.scenario_id in names and names[scenario.scenario_id] != scenario.content_hash:
+                    raise ContractError(f"scenario ID {scenario.scenario_id!r} cannot be reused with different "
+                                        "inputs/seed; choose a new ID or preserve the known inputs/seed")
+                names[scenario.scenario_id] = scenario.content_hash
         proposal = self.llm.ask(self.profile,
             "Design black-box test scenarios within the task's scenario space. "
             "Include boundary/coverage, regression, issue-driven and exploration cases. "
             "No algorithm implementation or lineage is available. Use stable scenario IDs.",
-            payload, ScenarioProposal, prefix + "/testing/scenario_generation")
+            payload, ScenarioProposal, prefix + "/testing/scenario_generation", validate=validate)
         self.store.save(prefix + "/testing/delta_suite.json", proposal)
         unique, names = {}, {}
         for scenario in core + previous + regression + proposal.scenarios:
